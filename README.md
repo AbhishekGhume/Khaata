@@ -8,8 +8,11 @@ Firebase Firestore so it persists and could later sync across devices.
 
 - **Kotlin** + **Jetpack Compose** (Material 3) — single-activity app, no XML layouts
 - **Firebase Firestore** — the database
-- **Firebase Anonymous Auth** — gives every install a private, stable user ID without
-  needing a login screen
+- **Firebase Authentication (Email/Password)** — sign up and sign in with email +
+  password, with inline validation, a password-visibility toggle, and a
+  "Forgot password?" reset flow. `MainActivity` listens for Firebase's auth state
+  via an `AuthStateListener` and swaps between `AuthScreen` and the main app
+  automatically — no manual navigation calls needed after sign-in/sign-up.
 - **MVVM**: `FinanceRepository` (Firestore reads/writes) → `FinanceViewModel`
   (`StateFlow`s) → Composable screens
 
@@ -17,7 +20,7 @@ Firebase Firestore so it persists and could later sync across devices.
 
 ```
 app/src/main/java/com/khaata/app/
-  MainActivity.kt              App shell: auth bootstrap, top bar with month nav, bottom nav
+  MainActivity.kt              App shell: auth-state listener, top bar (month nav + sign out), bottom nav
   data/model/Models.kt         Expense, MonthSummary, Goal, Contribution, GoalStats + date helpers
   data/repository/FinanceRepository.kt   All Firestore reads (as Flows) and writes
   viewmodel/FinanceViewModel.kt          Exposes StateFlows the UI collects
@@ -26,6 +29,7 @@ app/src/main/java/com/khaata/app/
   ui/components/Components.kt  SummaryCard, ProgressStamp (progress ring), StatusBadge,
                                 CategoryBarRow, DatePickerField
   ui/screens/
+    AuthScreen.kt        Email/password sign-in, sign-up, and password reset
     DashboardScreen.kt   Income/Kharcha/Net Savings cards, category breakdown, goals snapshot
     AddEntryScreen.kt    Set income, log an expense, see/delete this month's entries
     GoalsScreen.kt       Add goals, log contributions, see pace/status per goal
@@ -42,42 +46,21 @@ users/{uid}/goals/{id}                        { name, targetAmount, targetDate,
 users/{uid}/goals/{id}/contributions/{id}     { amount, date }
 ```
 
+`uid` here is the Firebase Auth UID of the signed-in email/password account, so each
+person's ledger is tied to their account rather than to a single device/install.
+
 `totalExpenses` and `savedAmount` are kept as running totals on the parent document
 (updated atomically with `FieldValue.increment`) so the Dashboard and History screens
 never need to fan out and sum a subcollection just to show a number. `monthlyContributions`
 is a map keyed by month (`"2026-06": 3000`) stored right on the goal doc, which is how a
 goal's card knows "have I put enough in *this* month" without a second listener.
 
-## Setting it up
-
-### 1. Create a Firebase project
-Go to the [Firebase console](https://console.firebase.google.com), create a project,
-then **Add app → Android**, using package name `com.khaata.app`.
-
-### 2. Turn on what the app needs
-- **Build → Authentication → Get started → Sign-in method → Anonymous → Enable**
-- **Build → Firestore Database → Create database** (start in production mode)
-- Once created, go to the **Rules** tab and paste in `firestore.rules` from this repo
-  (it restricts every user to their own `users/{uid}/...` data).
-
-### 3. Replace the placeholder config
-Download the real `google-services.json` from your Firebase project (Project settings
-→ your Android app), and **overwrite** `app/google-services.json` in this project —
-the one checked in here is a non-functional placeholder so the project compiles before
-you've connected your own Firebase project.
-
-### 4. Open and run
-Open the `KhaataApp` folder in Android Studio (Ladybug or newer), let Gradle sync,
-plug in a device or start an emulator (API 26+), and run. First launch signs the
-device in anonymously — that's the "no login screen" you'll see skipped automatically.
-
-> Android Studio's Image Asset tool can regenerate a sharper/adaptive launcher icon
-> any time — a basic one is already included so the project builds as-is.
-
 ## Design notes
 
 - **Palette**: navy ink, warm paper, ledger green / gold / rust — meant to feel like a
   physical passbook rather than a generic Material demo. It's intentionally light-only.
+- **AuthScreen** uses the same palette as the rest of the app (navy backdrop, paper
+  card) so signing in doesn't feel like a different product bolted onto the front.
 - **Responsiveness**: forms and the summary/goal cards use `FlowRow`, so on a phone
   they stack one-per-line and on a tablet or in landscape they naturally wrap into
   two or three per row — no hard-coded breakpoints.
@@ -86,10 +69,9 @@ device in anonymously — that's the "no login screen" you'll see skipped automa
 
 ## Known simplifications / good next steps
 
-- **Anonymous auth is per-install.** Uninstalling the app or switching devices starts
-  a fresh, empty ledger. The natural upgrade is `FirebaseAuth.linkWithCredential` to
-  let someone turn their anonymous account into a real Google/email account later
-  without losing data — wire that up if you want the same ledger on multiple phones.
+- **No email verification enforced.** Accounts can be created and used immediately;
+  `FirebaseUser.sendEmailVerification()` / checking `isEmailVerified` is the natural
+  next step if you want to confirm addresses are real.
 - **No multi-currency.** Amounts are stored as plain `Double`, formatted as ₹.
 - **Deleting a goal** batch-deletes its `contributions` subcollection first, since
   Firestore doesn't cascade-delete subcollections automatically.
