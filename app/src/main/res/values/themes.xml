@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.Khaata" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#1B2A38</item>
+        <item name="android:windowBackground">#FBF8F1</item>
+    </style>
+</resources>
