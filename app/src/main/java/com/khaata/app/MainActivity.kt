@@ -1,7 +1,6 @@
 package com.khaata.app
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -16,6 +15,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,15 +39,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.firebase.auth.FirebaseAuth
 import com.khaata.app.data.model.monthLabel
 import com.khaata.app.data.repository.FinanceRepository
 import com.khaata.app.ui.screens.AddEntryScreen
+import com.khaata.app.ui.screens.AnalyticsScreen
 import com.khaata.app.ui.screens.AuthScreen
 import com.khaata.app.ui.screens.DashboardScreen
 import com.khaata.app.ui.screens.GoalsScreen
 import com.khaata.app.ui.screens.HistoryScreen
+import com.khaata.app.ui.screens.SecurityGateScreen
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.KhaataTheme
@@ -59,12 +62,13 @@ import com.khaata.app.viewmodel.FinanceViewModelFactory
 
 enum class KhaataTab(val label: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Filled.Home),
+    ANALYTICS("Analytics", Icons.Filled.ShowChart),
     ENTRY("Add Entry", Icons.Filled.Add),
     GOALS("Goals", Icons.Filled.Flag),
     HISTORY("History", Icons.Filled.History),
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -74,11 +78,13 @@ class MainActivity : ComponentActivity() {
                 // for a split second while Firebase restores a saved session.
                 var uid by remember { mutableStateOf<String?>(null) }
                 var checkedSession by remember { mutableStateOf(false) }
+                var unlocked by remember { mutableStateOf(false) }
 
                 DisposableEffect(Unit) {
                     val auth = FirebaseAuth.getInstance()
                     val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
                         uid = firebaseAuth.currentUser?.uid
+                        unlocked = false
                         checkedSession = true
                     }
                     auth.addAuthStateListener(listener)
@@ -88,11 +94,21 @@ class MainActivity : ComponentActivity() {
                 when {
                     !checkedSession -> LoadingScreen()
                     uid == null -> AuthScreen()
+                    !unlocked -> SecurityGateScreen(
+                        onUnlocked = { unlocked = true },
+                        onSignOut = { FirebaseAuth.getInstance().signOut() }
+                    )
                     else -> {
                         val viewModel: FinanceViewModel = viewModel(
                             factory = FinanceViewModelFactory(FinanceRepository(uid!!))
                         )
-                        KhaataApp(viewModel, onSignOut = { FirebaseAuth.getInstance().signOut() })
+                        KhaataApp(
+                            viewModel,
+                            onSignOut = {
+                                unlocked = false
+                                FirebaseAuth.getInstance().signOut()
+                            }
+                        )
                     }
                 }
             }
@@ -162,6 +178,7 @@ fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (activeTab) {
                 KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
+                KhaataTab.ANALYTICS -> AnalyticsScreen(viewModel)
                 KhaataTab.ENTRY -> AddEntryScreen(viewModel)
                 KhaataTab.GOALS -> GoalsScreen(viewModel)
                 KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->

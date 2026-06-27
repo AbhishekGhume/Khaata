@@ -4,10 +4,13 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
+import com.khaata.app.data.model.AnalyticsSnapshot
+import com.khaata.app.data.model.CategoryTrendItem
 import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
+import com.khaata.app.data.model.MonthlyAnalyticsPoint
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -81,6 +84,67 @@ class FinanceRepository(private val uid: String) {
             trySend(list)
         }
         awaitClose { reg.remove() }
+    }
+
+    private suspend fun loadExpensesForMonth(monthKey: String): List<Expense> {
+        return monthsRef().document(monthKey).collection("expenses").get().await().documents.map { d ->
+            Expense(
+                id = d.id,
+                category = d.getString("category") ?: "other",
+                amount = d.getDouble("amount") ?: 0.0,
+                note = d.getString("note") ?: "",
+                date = d.getString("date") ?: ""
+            )
+        }
+    }
+
+    private fun categoryTotals(expenses: List<Expense>): Map<String, Double> {
+        return expenses.groupBy { it.category }.mapValues { (_, list) -> list.sumOf { it.amount } }
+    }
+
+    suspend fun buildAnalyticsSnapshot(months: List<MonthSummary>, recentMonthCount: Int = 12): AnalyticsSnapshot {
+        val recentMonths = months.sortedBy { it.monthKey }.takeLast(recentMonthCount)
+        if (recentMonths.isEmpty()) return AnalyticsSnapshot()
+
+        val monthlyPoints = recentMonths.map { month ->
+            MonthlyAnalyticsPoint(
+                monthKey = month.monthKey,
+                income = month.income,
+                expenses = month.totalExpenses
+            )
+        }
+
+        val latestMonthKey = recentMonths.last().monthKey
+        val previousMonthKey = recentMonths.getOrNull(recentMonths.lastIndex - 1)?.monthKey
+
+        val latestExpenses = loadExpensesForMonth(latestMonthKey)
+        val previousExpenses = if (previousMonthKey != null) loadExpensesForMonth(previousMonthKey) else emptyList()
+
+        val latestTotals = categoryTotals(latestExpenses)
+        val previousTotals = categoryTotals(previousExpenses)
+
+        val categoryTrends = (latestTotals.keys + previousTotals.keys)
+            .distinct()
+            .map { key ->
+                CategoryTrendItem(
+                    categoryKey = key,
+                    currentAmount = latestTotals[key] ?: 0.0,
+                    previousAmount = previousTotals[key] ?: 0.0
+                )
+            }
+            .sortedByDescending { kotlin.math.abs(it.delta) }
+            .take(6)
+
+        val savingsRates = monthlyPoints.mapNotNull { if (it.income > 0.0) it.savingsRate else null }
+
+        return AnalyticsSnapshot(
+            months = monthlyPoints,
+            categoryTrends = categoryTrends,
+            biggestExpenses = latestExpenses.sortedByDescending { it.amount }.take(3),
+            averageSavingsRate = if (savingsRates.isEmpty()) 0.0 else savingsRates.average(),
+            bestMonthKey = monthlyPoints.maxByOrNull { it.netSavings }?.monthKey,
+            worstMonthKey = monthlyPoints.minByOrNull { it.netSavings }?.monthKey
+        )
     }
 
     fun observeGoals(): Flow<List<Goal>> = callbackFlow {

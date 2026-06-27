@@ -3,6 +3,7 @@ package com.khaata.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.khaata.app.data.model.AnalyticsSnapshot
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -36,6 +38,11 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
 
     val allMonths: StateFlow<List<MonthSummary>> = repository.observeAllMonths()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val analytics: StateFlow<AnalyticsSnapshot> = allMonths
+        .mapLatest { months -> repository.buildAnalyticsSnapshot(months) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AnalyticsSnapshot())
 
     val goals: StateFlow<List<Goal>> = repository.observeGoals()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
