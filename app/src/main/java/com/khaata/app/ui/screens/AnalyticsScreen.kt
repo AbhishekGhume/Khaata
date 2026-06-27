@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.AnalyticsSnapshot
+import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.GoalStats
@@ -69,6 +70,7 @@ import kotlin.math.min
 fun AnalyticsScreen(viewModel: FinanceViewModel) {
     val analytics by viewModel.analytics.collectAsState()
     val goals by viewModel.goals.collectAsState()
+    val budgetProgress by viewModel.budgetProgress.collectAsState()
 
     val trendMonths = remember(analytics.months) { analytics.months.takeLast(6) }
     val bestMonth = analytics.bestMonthKey?.let { key -> analytics.months.find { it.monthKey == key } }
@@ -117,6 +119,26 @@ fun AnalyticsScreen(viewModel: FinanceViewModel) {
                     accent = if ((trendMonths.lastOrNull()?.netSavings ?: 0.0) >= 0.0) Green else Rust,
                     sub = trendMonths.lastOrNull()?.monthKey?.let { monthLabel(it) } ?: "No months yet"
                 )
+            }
+        }
+
+        item {
+            AnalyticsCard(title = "Budget summary", subtitle = "Budgets and trends together") {
+                if (budgetProgress.isEmpty()) {
+                    EmptyState("No budgets for the current month yet.")
+                } else {
+                    val overCount = budgetProgress.count { it.status == BudgetStatus.OVER }
+                    val watchCount = budgetProgress.count { it.status == BudgetStatus.WATCHING }
+                    val projectedRunoutCount = budgetProgress.count { it.projectedRunout }
+                    val budgetSpent = budgetProgress.sumOf { it.spentAmount }
+                    val budgetLimit = budgetProgress.sumOf { it.limitAmount }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        MetricCard("Budget spent", formatINR(budgetSpent), if (overCount > 0) Rust else Green, "Across ${budgetProgress.size} caps")
+                        MetricCard("Budget limit", formatINR(budgetLimit), Gold, if (watchCount > 0) "$watchCount near warning" else "No active warnings")
+                        MetricCard("Over budget", "$overCount", if (overCount > 0 || projectedRunoutCount > 0) Rust else Green, "Categories past or near runout")
+                        MetricCard("Runout risk", "$projectedRunoutCount", if (projectedRunoutCount > 0) Rust else Green, "Likely to run out before month end")
+                    }
+                }
             }
         }
 

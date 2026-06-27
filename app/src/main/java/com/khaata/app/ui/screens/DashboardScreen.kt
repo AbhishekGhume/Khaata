@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.GoalStatus
+import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
 import com.khaata.app.ui.components.CategoryBarRow
@@ -51,6 +52,7 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
     val monthSummary by viewModel.monthSummary.collectAsState()
     val expenses by viewModel.expenses.collectAsState()
     val goals by viewModel.goals.collectAsState()
+    val budgetProgress by viewModel.budgetProgress.collectAsState()
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val isCurrentMonth = viewedMonthKey == currentMonthKey()
 
@@ -67,6 +69,11 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
     val totalRequiredMonthly = goalStats.filter { !it.second.achieved }.sumOf { it.second.requiredMonthly }
     val totalContributedThisMonth = goalStats.sumOf { it.second.contributedThisMonth }
     val shortfall = totalRequiredMonthly - monthSummary.netSavings
+    val budgetSpent = budgetProgress.sumOf { it.spentAmount }
+    val budgetLimit = budgetProgress.sumOf { it.limitAmount }
+    val overBudgets = budgetProgress.count { it.status == BudgetStatus.OVER }
+    val watchingBudgets = budgetProgress.count { it.status == BudgetStatus.WATCHING }
+    val projectedRunoutBudgets = budgetProgress.filter { it.projectedRunout }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -83,6 +90,37 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
                     accent = if (monthSummary.netSavings >= 0) Green else Rust,
                     sub = if (monthSummary.netSavings < 0) "spent more than earned" else null
                 )
+                if (budgetProgress.isNotEmpty()) {
+                    SummaryCard(
+                        modifier = Modifier.widthIn(min = 150.dp),
+                        label = "Budget usage",
+                        value = formatINR(budgetSpent),
+                        accent = if (overBudgets > 0) Rust else if (watchingBudgets > 0) Gold else Green,
+                        sub = "of ${formatINR(budgetLimit)} across ${budgetProgress.size} caps"
+                    )
+                }
+            }
+        }
+
+        if (budgetProgress.isNotEmpty()) {
+            item {
+                val warningText = when {
+                    projectedRunoutBudgets.isNotEmpty() -> "${projectedRunoutBudgets.size} budget${if (projectedRunoutBudgets.size == 1) " is" else "s are"} likely to run out before month end."
+                    overBudgets > 0 -> "$overBudgets budget${if (overBudgets == 1) " is" else "s are"} over limit."
+                    watchingBudgets > 0 -> "$watchingBudgets budget${if (watchingBudgets == 1) " is" else "s are"} near the limit."
+                    else -> "All budgets are on track right now."
+                }
+                Surface(
+                    color = if (projectedRunoutBudgets.isNotEmpty() || overBudgets > 0) RustSoft else GreenSoft,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(
+                        warningText,
+                        modifier = Modifier.padding(12.dp),
+                        fontSize = 13.sp,
+                        color = if (projectedRunoutBudgets.isNotEmpty() || overBudgets > 0) Rust else Green
+                    )
+                }
             }
         }
 
@@ -114,7 +152,18 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
             item { Text("No expenses logged for this month yet.", color = Muted, fontSize = 13.sp) }
         } else {
             items(categoryTotals) { (meta, amount, pct) ->
-                CategoryBarRow(label = meta.label, color = meta.color, amount = formatINR(amount), pct = pct)
+                val budget = budgetProgress.firstOrNull { it.category == meta.key }
+                CategoryBarRow(
+                    label = meta.label,
+                    color = when {
+                        budget?.projectedRunout == true -> Rust
+                        budget?.status == BudgetStatus.OVER -> Rust
+                        budget?.status == BudgetStatus.WATCHING -> Gold
+                        else -> meta.color
+                    },
+                    amount = formatINR(amount),
+                    pct = pct
+                )
             }
         }
 

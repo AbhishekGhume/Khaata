@@ -5,7 +5,10 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.khaata.app.data.model.AnalyticsSnapshot
+import com.khaata.app.data.model.buildBudgetProgress
 import com.khaata.app.data.model.CategoryTrendItem
+import com.khaata.app.data.model.Budget
+import com.khaata.app.data.model.BudgetProgress
 import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
@@ -23,6 +26,7 @@ import kotlinx.coroutines.tasks.await
  * Firestore layout:
  *   users/{uid}/months/{yyyy-MM}                -> { income, totalExpenses }
  *   users/{uid}/months/{yyyy-MM}/expenses/{id}   -> { category, amount, note, date }
+ *   users/{uid}/budgets/{yyyy-MM_category}       -> { category, limitAmount, monthKey }
  *   users/{uid}/goals/{id}                       -> { name, targetAmount, targetDate,
  *                                                      createdAt, savedAmount, monthlyContributions }
  *   users/{uid}/goals/{id}/contributions/{id}    -> { amount, date }
@@ -32,6 +36,7 @@ class FinanceRepository(private val uid: String) {
     private val db = FirebaseFirestore.getInstance()
     private val userRoot get() = db.collection("users").document(uid)
     private fun monthsRef() = userRoot.collection("months")
+    private fun budgetsRef() = userRoot.collection("budgets")
     private fun goalsRef() = userRoot.collection("goals")
 
     fun observeMonthSummary(monthKey: String): Flow<MonthSummary> = callbackFlow {
@@ -84,6 +89,61 @@ class FinanceRepository(private val uid: String) {
             trySend(list)
         }
         awaitClose { reg.remove() }
+    }
+
+    fun observeBudgets(monthKey: String): Flow<List<Budget>> = callbackFlow {
+        val reg = budgetsRef().whereEqualTo("monthKey", monthKey).addSnapshotListener { snap, err ->
+            if (err != null) return@addSnapshotListener
+            val list = snap?.documents?.map { d ->
+                Budget(
+                    id = d.id,
+                    category = d.getString("category") ?: "other",
+                    limitAmount = d.getDouble("limitAmount") ?: 0.0,
+                    monthKey = d.getString("monthKey") ?: monthKey
+                )
+            } ?: emptyList()
+            trySend(list.sortedBy { it.category })
+        }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun loadBudgetProgress(monthKey: String): List<BudgetProgress> {
+        val budgets = budgetsRef().whereEqualTo("monthKey", monthKey).get().await().documents.map { d ->
+            Budget(
+                id = d.id,
+                category = d.getString("category") ?: "other",
+                limitAmount = d.getDouble("limitAmount") ?: 0.0,
+                monthKey = d.getString("monthKey") ?: monthKey
+            )
+        }
+        if (budgets.isEmpty()) return emptyList()
+
+        val expenses = monthsRef().document(monthKey).collection("expenses").get().await().documents.map { d ->
+            Expense(
+                id = d.id,
+                category = d.getString("category") ?: "other",
+                amount = d.getDouble("amount") ?: 0.0,
+                note = d.getString("note") ?: "",
+                date = d.getString("date") ?: ""
+            )
+        }
+        val spentByCategory = expenses.groupBy { it.category }.mapValues { (_, list) -> list.sumOf { it.amount } }
+        return budgets.map { budget -> buildBudgetProgress(budget, spentByCategory[budget.category] ?: 0.0) }
+            .sortedByDescending { it.pct }
+    }
+
+    suspend fun setBudget(monthKey: String, category: String, limitAmount: Double) {
+        budgetsRef().document("${monthKey}_$category").set(
+            mapOf(
+                "category" to category,
+                "limitAmount" to limitAmount,
+                "monthKey" to monthKey
+            )
+        ).await()
+    }
+
+    suspend fun deleteBudget(monthKey: String, category: String) {
+        budgetsRef().document("${monthKey}_$category").delete().await()
     }
 
     private suspend fun loadExpensesForMonth(monthKey: String): List<Expense> {

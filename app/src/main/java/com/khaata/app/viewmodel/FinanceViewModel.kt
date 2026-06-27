@@ -4,9 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.khaata.app.data.model.AnalyticsSnapshot
+import com.khaata.app.data.model.Budget
+import com.khaata.app.data.model.BudgetProgress
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
+import com.khaata.app.data.model.buildBudgetProgress
 import com.khaata.app.data.model.currentMonthKey
 import com.khaata.app.data.model.monthKeyFromDate
 import com.khaata.app.data.model.shiftMonth
@@ -16,6 +19,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -45,6 +49,23 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AnalyticsSnapshot())
 
     val goals: StateFlow<List<Goal>> = repository.observeGoals()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val budgets: StateFlow<List<Budget>> = _viewedMonthKey
+        .flatMapLatest { key -> repository.observeBudgets(key) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val budgetProgress: StateFlow<List<BudgetProgress>> = _viewedMonthKey
+        .flatMapLatest { key ->
+            combine(repository.observeBudgets(key), repository.observeExpenses(key)) { budgets, expenses ->
+                val spentByCategory = expenses.groupBy { it.category }.mapValues { (_, list) -> list.sumOf { it.amount } }
+                budgets.map { budget ->
+                    com.khaata.app.data.model.buildBudgetProgress(budget, spentByCategory[budget.category] ?: 0.0)
+                }.sortedByDescending { it.pct }
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun goToMonth(delta: Int) {
@@ -80,6 +101,14 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
 
     fun logContribution(goalId: String, amount: Double, date: String) = viewModelScope.launch {
         repository.logContribution(goalId, monthKeyFromDate(date), amount, date)
+    }
+
+    fun setBudget(category: String, limitAmount: Double) = viewModelScope.launch {
+        repository.setBudget(_viewedMonthKey.value, category, limitAmount)
+    }
+
+    fun deleteBudget(category: String) = viewModelScope.launch {
+        repository.deleteBudget(_viewedMonthKey.value, category)
     }
 }
 

@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -36,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,6 +54,7 @@ import com.khaata.app.ui.screens.AuthScreen
 import com.khaata.app.ui.screens.DashboardScreen
 import com.khaata.app.ui.screens.GoalsScreen
 import com.khaata.app.ui.screens.HistoryScreen
+import com.khaata.app.ui.screens.BudgetsScreen
 import com.khaata.app.ui.screens.SecurityGateScreen
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Ink
@@ -63,6 +68,7 @@ import com.khaata.app.viewmodel.FinanceViewModelFactory
 enum class KhaataTab(val label: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Filled.Home),
     ANALYTICS("Analytics", Icons.Filled.ShowChart),
+    BUDGETS("Budgets", Icons.Filled.ListAlt),
     ENTRY("Add Entry", Icons.Filled.Add),
     GOALS("Goals", Icons.Filled.Flag),
     HISTORY("History", Icons.Filled.History),
@@ -131,29 +137,46 @@ private fun LoadingScreen() {
 fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
+    val budgetProgress by viewModel.budgetProgress.collectAsState()
     val showMonthNav = activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY
+    val projectedRunoutCount = budgetProgress.count { it.projectedRunout }
+    val overCount = budgetProgress.count { it.status == com.khaata.app.data.model.BudgetStatus.OVER }
+    val stripColor = when {
+        projectedRunoutCount > 0 || overCount > 0 -> com.khaata.app.ui.theme.Rust
+        budgetProgress.any { it.status == com.khaata.app.data.model.BudgetStatus.WATCHING } -> Gold
+        budgetProgress.isNotEmpty() -> com.khaata.app.ui.theme.Green
+        else -> com.khaata.app.ui.theme.NavySoft
+    }
 
     Scaffold(
         containerColor = Paper,
         topBar = {
-            TopAppBar(
-                title = { Text("Khaata", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
-                actions = {
-                    if (showMonthNav) {
-                        IconButton(onClick = { viewModel.goToMonth(-1) }) {
-                            Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous month", tint = Paper)
+            Column {
+                TopAppBar(
+                    title = { Text("Khaata", fontWeight = FontWeight.Bold) },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
+                    actions = {
+                        if (showMonthNav) {
+                            IconButton(onClick = { viewModel.goToMonth(-1) }) {
+                                Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous month", tint = Paper)
+                            }
+                            Text(monthLabel(viewedMonthKey), color = Paper, modifier = Modifier.padding(horizontal = 2.dp))
+                            IconButton(onClick = { viewModel.goToMonth(1) }) {
+                                Icon(Icons.Filled.ChevronRight, contentDescription = "Next month", tint = Paper)
+                            }
                         }
-                        Text(monthLabel(viewedMonthKey), color = Paper, modifier = Modifier.padding(horizontal = 2.dp))
-                        IconButton(onClick = { viewModel.goToMonth(1) }) {
-                            Icon(Icons.Filled.ChevronRight, contentDescription = "Next month", tint = Paper)
+                        IconButton(onClick = onSignOut) {
+                            Icon(Icons.Filled.Logout, contentDescription = "Sign out", tint = Paper)
                         }
                     }
-                    IconButton(onClick = onSignOut) {
-                        Icon(Icons.Filled.Logout, contentDescription = "Sign out", tint = Paper)
-                    }
-                }
-            )
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(stripColor)
+                )
+            }
         },
         bottomBar = {
             NavigationBar(containerColor = Ink, contentColor = Paper) {
@@ -179,6 +202,7 @@ fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
             when (activeTab) {
                 KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
                 KhaataTab.ANALYTICS -> AnalyticsScreen(viewModel)
+                KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
                 KhaataTab.ENTRY -> AddEntryScreen(viewModel)
                 KhaataTab.GOALS -> GoalsScreen(viewModel)
                 KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->

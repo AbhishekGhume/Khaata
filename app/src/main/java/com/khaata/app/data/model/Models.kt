@@ -15,6 +15,70 @@ data class Expense(
     val date: String = "" // yyyy-MM-dd
 )
 
+/** A monthly category budget, e.g. Food = ₹3,000 for 2026-06. */
+data class Budget(
+    val id: String = "",
+    val category: String = "other",
+    val limitAmount: Double = 0.0,
+    val monthKey: String = ""
+)
+
+enum class BudgetStatus { ON_TRACK, WATCHING, OVER }
+
+data class BudgetProgress(
+    val category: String,
+    val limitAmount: Double,
+    val spentAmount: Double,
+    val remainingAmount: Double,
+    val pct: Float,
+    val status: BudgetStatus,
+    val daysLeftInMonth: Int,
+    val requiredDailySpend: Double,
+    val projectedRunout: Boolean,
+    val projectedRunoutDays: Int
+)
+
+fun daysLeftInMonth(monthKey: String): Int {
+    val ym = runCatching { YearMonth.parse(monthKey) }.getOrElse { YearMonth.now() }
+    val today = LocalDate.now()
+    val monthEnd = ym.atEndOfMonth()
+    return when {
+        ym.isBefore(YearMonth.from(today)) -> 0
+        ym.isAfter(YearMonth.from(today)) -> ym.lengthOfMonth()
+        else -> ChronoUnit.DAYS.between(today, monthEnd).toInt() + 1
+    }.coerceAtLeast(0)
+}
+
+fun buildBudgetProgress(budget: Budget, spentAmount: Double): BudgetProgress {
+    val remaining = (budget.limitAmount - spentAmount).coerceAtLeast(0.0)
+    val pct = if (budget.limitAmount > 0.0) ((spentAmount / budget.limitAmount) * 100.0).coerceIn(0.0, 100.0).toFloat() else 0f
+    val today = LocalDate.now()
+    val status = when {
+        spentAmount >= budget.limitAmount && budget.limitAmount > 0.0 -> BudgetStatus.OVER
+        pct >= 80f -> BudgetStatus.WATCHING
+        else -> BudgetStatus.ON_TRACK
+    }
+    val daysLeft = daysLeftInMonth(budget.monthKey)
+    val monthStart = runCatching { YearMonth.parse(budget.monthKey).atDay(1) }.getOrElse { YearMonth.now().atDay(1) }
+    val daysElapsed = ChronoUnit.DAYS.between(monthStart, today).toInt().coerceAtLeast(0) + 1
+    val avgDailySpend = if (daysElapsed > 0) spentAmount / daysElapsed else spentAmount
+    val projectedRunoutDays = if (avgDailySpend > 0.0) kotlin.math.ceil(remaining / avgDailySpend).toInt() else Int.MAX_VALUE
+    val projectedRunout = projectedRunoutDays <= daysLeft && remaining > 0.0
+    val requiredDailySpend = if (daysLeft > 0) remaining / daysLeft else remaining
+    return BudgetProgress(
+        category = budget.category,
+        limitAmount = budget.limitAmount,
+        spentAmount = spentAmount,
+        remainingAmount = remaining,
+        pct = pct,
+        status = status,
+        daysLeftInMonth = daysLeft,
+        requiredDailySpend = requiredDailySpend,
+        projectedRunout = projectedRunout,
+        projectedRunoutDays = projectedRunoutDays
+    )
+}
+
 /** Rolled-up totals for one calendar month, e.g. "2026-06". */
 data class MonthSummary(
     val monthKey: String = "",
