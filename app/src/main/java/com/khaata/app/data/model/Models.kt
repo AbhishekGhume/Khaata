@@ -119,7 +119,8 @@ data class GoalStats(
     val requiredMonthly: Double,
     val contributedThisMonth: Double,
     val pct: Float,
-    val status: GoalStatus
+    val status: GoalStatus,
+    val nextMilestonePct: Int
 )
 
 /** Same "are you on pace" math as the web version of Khaata. */
@@ -141,7 +142,14 @@ fun Goal.computeStats(currentMonthKey: String): GoalStats {
         contributedThisMonth + 0.001 >= requiredMonthly -> GoalStatus.ON_TRACK
         else -> GoalStatus.BEHIND
     }
-    return GoalStats(daysLeft, monthsLeftRaw, remaining, achieved, overdue, requiredMonthly, contributedThisMonth, pct, status)
+    val nextMilestonePct = when {
+        pct < 25f -> 25
+        pct < 50f -> 50
+        pct < 75f -> 75
+        pct < 100f -> 100
+        else -> 100
+    }
+    return GoalStats(daysLeft, monthsLeftRaw, remaining, achieved, overdue, requiredMonthly, contributedThisMonth, pct, status, nextMilestonePct)
 }
 
 fun currentMonthKey(): String = YearMonth.now().toString()

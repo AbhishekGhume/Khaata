@@ -1,0 +1,124 @@
+package com.khaata.app.ui.screens
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import com.khaata.app.notifications.TEST_NOTIFICATION_ID
+import com.khaata.app.notifications.loadReminderSettings
+import com.khaata.app.notifications.saveReminderSettings
+import com.khaata.app.notifications.showReminderNotification
+import com.khaata.app.ui.theme.Ink
+import com.khaata.app.ui.theme.Muted
+import com.khaata.app.ui.theme.Paper
+import com.khaata.app.ui.theme.PaperCard
+import com.khaata.app.ui.theme.PaperLine
+import com.khaata.app.viewmodel.FinanceViewModel
+
+@Composable
+fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var settings by remember { mutableStateOf(loadReminderSettings(context)) }
+
+    LaunchedEffect(settings) {
+        saveReminderSettings(context, settings)
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+            }
+            Text("Notification settings", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        }
+        Text("Choose which local reminders you want Khaata to send.", color = Muted, fontSize = 13.sp)
+
+        SettingCard(
+            title = "Budget warnings",
+            subtitle = "Alert when a budget is likely to run out or goes over cap",
+            checked = settings.budgetWarningsEnabled,
+            onCheckedChange = { settings = settings.copy(budgetWarningsEnabled = it) }
+        )
+        SettingCard(
+            title = "Inactivity reminders",
+            subtitle = "Remind you when you have not logged spending for a few days",
+            checked = settings.inactivityRemindersEnabled,
+            onCheckedChange = { settings = settings.copy(inactivityRemindersEnabled = it) }
+        )
+        SettingCard(
+            title = "Goal milestones",
+            subtitle = "Celebrate 25%, 50%, 75% and 100% progress toward a goal",
+            checked = settings.goalMilestonesEnabled,
+            onCheckedChange = { settings = settings.copy(goalMilestonesEnabled = it) }
+        )
+
+        Spacer(Modifier.height(6.dp))
+        Button(
+            onClick = {
+                showReminderNotification(
+                    context,
+                    TEST_NOTIFICATION_ID,
+                    "Test notification",
+                    "This is a test reminder from Khaata."
+                )
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper)
+        ) {
+            Text("Send test notification")
+        }
+    }
+}
+
+@Composable
+private fun SettingCard(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(Modifier.height(2.dp))
+                Text(subtitle, color = Muted, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange
+            )
+        }
+    }
+}

@@ -12,8 +12,12 @@ import com.khaata.app.data.model.BudgetProgress
 import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
+import com.khaata.app.data.model.GoalStats
 import com.khaata.app.data.model.MonthSummary
 import com.khaata.app.data.model.MonthlyAnalyticsPoint
+import com.khaata.app.data.model.computeStats
+import com.khaata.app.data.model.currentMonthKey
+import java.time.LocalDate
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -144,6 +148,44 @@ class FinanceRepository(private val uid: String) {
 
     suspend fun deleteBudget(monthKey: String, category: String) {
         budgetsRef().document("${monthKey}_$category").delete().await()
+    }
+
+    suspend fun latestBudgetProgress(monthKey: String): List<BudgetProgress> = loadBudgetProgress(monthKey)
+
+    suspend fun loadLatestExpenseDate(monthKey: String): String? {
+        val snapshot = monthsRef().document(monthKey).collection("expenses")
+            .orderBy("date", Query.Direction.DESCENDING)
+            .limit(1)
+            .get()
+            .await()
+        return snapshot.documents.firstOrNull()?.getString("date")
+    }
+
+    suspend fun loadLatestMonthKey(): String? {
+        val snapshot = monthsRef().get().await()
+        return snapshot.documents.map { it.id }.sorted().lastOrNull()
+    }
+
+    suspend fun loadGoalsOnce(): List<Goal> {
+        val snapshot = goalsRef().orderBy("createdAt").get().await()
+        return snapshot.documents.map { d ->
+            @Suppress("UNCHECKED_CAST")
+            val rawContrib = d.get("monthlyContributions") as? Map<String, Any?> ?: emptyMap()
+            Goal(
+                id = d.id,
+                name = d.getString("name") ?: "",
+                targetAmount = d.getDouble("targetAmount") ?: 0.0,
+                targetDate = d.getString("targetDate") ?: "",
+                createdAt = d.getString("createdAt") ?: "",
+                savedAmount = d.getDouble("savedAmount") ?: 0.0,
+                monthlyContributions = rawContrib.mapValues { (_, v) -> (v as? Number)?.toDouble() ?: 0.0 }
+            )
+        }
+    }
+
+    suspend fun currentGoalStats(): List<Pair<Goal, GoalStats>> {
+        val monthKey = currentMonthKey()
+        return loadGoalsOnce().map { goal -> goal to goal.computeStats(monthKey) }
     }
 
     private suspend fun loadExpensesForMonth(monthKey: String): List<Expense> {

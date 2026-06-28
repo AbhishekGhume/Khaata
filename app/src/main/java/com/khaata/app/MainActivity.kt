@@ -1,6 +1,8 @@
 package com.khaata.app
 
 import android.os.Bundle
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,15 +42,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.google.firebase.auth.FirebaseAuth
 import com.khaata.app.data.model.monthLabel
+import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.repository.FinanceRepository
+import com.khaata.app.notifications.ReminderWorker
+import com.khaata.app.notifications.ensureNotificationChannel
 import com.khaata.app.ui.screens.AddEntryScreen
 import com.khaata.app.ui.screens.AnalyticsScreen
 import com.khaata.app.ui.screens.AuthScreen
@@ -56,6 +68,7 @@ import com.khaata.app.ui.screens.GoalsScreen
 import com.khaata.app.ui.screens.HistoryScreen
 import com.khaata.app.ui.screens.BudgetsScreen
 import com.khaata.app.ui.screens.SecurityGateScreen
+import com.khaata.app.ui.screens.NotificationSettingsScreen
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.KhaataTheme
@@ -64,6 +77,7 @@ import com.khaata.app.ui.theme.NavySoft
 import com.khaata.app.ui.theme.Paper
 import com.khaata.app.viewmodel.FinanceViewModel
 import com.khaata.app.viewmodel.FinanceViewModelFactory
+import java.util.concurrent.TimeUnit
 
 enum class KhaataTab(val label: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Filled.Home),
@@ -85,6 +99,18 @@ class MainActivity : FragmentActivity() {
                 var uid by remember { mutableStateOf<String?>(null) }
                 var checkedSession by remember { mutableStateOf(false) }
                 var unlocked by remember { mutableStateOf(false) }
+                val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestPermission()
+                ) { }
+
+                LaunchedEffect(Unit) {
+                    ensureNotificationChannel(this@MainActivity)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
 
                 DisposableEffect(Unit) {
                     val auth = FirebaseAuth.getInstance()
@@ -108,6 +134,15 @@ class MainActivity : FragmentActivity() {
                         val viewModel: FinanceViewModel = viewModel(
                             factory = FinanceViewModelFactory(FinanceRepository(uid!!))
                         )
+                        LaunchedEffect(uid) {
+                            val request = PeriodicWorkRequestBuilder<ReminderWorker>(24, TimeUnit.HOURS)
+                                .build()
+                            WorkManager.getInstance(this@MainActivity).enqueueUniquePeriodicWork(
+                                "khaata_daily_reminders",
+                                ExistingPeriodicWorkPolicy.UPDATE,
+                                request
+                            )
+                        }
                         KhaataApp(
                             viewModel,
                             onSignOut = {
@@ -136,9 +171,10 @@ private fun LoadingScreen() {
 @Composable
 fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
+    var showSettings by remember { mutableStateOf(false) }
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
-    val showMonthNav = activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY
+    val showMonthNav = !showSettings && (activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY)
     val projectedRunoutCount = budgetProgress.count { it.projectedRunout }
     val overCount = budgetProgress.count { it.status == com.khaata.app.data.model.BudgetStatus.OVER }
     val stripColor = when {
@@ -156,6 +192,9 @@ fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
                     title = { Text("Khaata", fontWeight = FontWeight.Bold) },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
                     actions = {
+                        IconButton(onClick = { showSettings = !showSettings }) {
+                            Icon(Icons.Filled.Settings, contentDescription = "Open settings", tint = Paper)
+                        }
                         if (showMonthNav) {
                             IconButton(onClick = { viewModel.goToMonth(-1) }) {
                                 Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous month", tint = Paper)
@@ -199,15 +238,22 @@ fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when (activeTab) {
-                KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
-                KhaataTab.ANALYTICS -> AnalyticsScreen(viewModel)
-                KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
-                KhaataTab.ENTRY -> AddEntryScreen(viewModel)
-                KhaataTab.GOALS -> GoalsScreen(viewModel)
-                KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
-                    viewModel.jumpToMonth(key)
-                    activeTab = KhaataTab.DASHBOARD
+            if (showSettings) {
+                NotificationSettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { showSettings = false }
+                )
+            } else {
+                when (activeTab) {
+                    KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
+                    KhaataTab.ANALYTICS -> AnalyticsScreen(viewModel)
+                    KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
+                    KhaataTab.ENTRY -> AddEntryScreen(viewModel)
+                    KhaataTab.GOALS -> GoalsScreen(viewModel)
+                    KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
+                        viewModel.jumpToMonth(key)
+                        activeTab = KhaataTab.DASHBOARD
+                    }
                 }
             }
         }
