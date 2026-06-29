@@ -3,6 +3,7 @@ package com.khaata.app
 import android.os.Bundle
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -59,6 +60,7 @@ import com.khaata.app.data.model.monthLabel
 import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.repository.FinanceRepository
 import com.khaata.app.notifications.ReminderWorker
+import com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY
 import com.khaata.app.notifications.ensureNotificationChannel
 import com.khaata.app.ui.screens.AddEntryScreen
 import com.khaata.app.ui.screens.AnalyticsScreen
@@ -89,8 +91,11 @@ enum class KhaataTab(val label: String, val icon: ImageVector) {
 }
 
 class MainActivity : FragmentActivity() {
+    private var openEntryTabRequested by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleNotificationIntent(intent)
         setContent {
             KhaataTheme {
                 // null = "not checked yet", "" is never a real value here \u2014
@@ -145,6 +150,8 @@ class MainActivity : FragmentActivity() {
                         }
                         KhaataApp(
                             viewModel,
+                            openEntryTabRequested = openEntryTabRequested,
+                            onOpenEntryTabHandled = { openEntryTabRequested = false },
                             onSignOut = {
                                 unlocked = false
                                 FirebaseAuth.getInstance().signOut()
@@ -153,6 +160,18 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_ADD_ENTRY, false) == true) {
+            openEntryTabRequested = true
         }
     }
 }
@@ -169,7 +188,12 @@ private fun LoadingScreen() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
+fun KhaataApp(
+    viewModel: FinanceViewModel,
+    openEntryTabRequested: Boolean,
+    onOpenEntryTabHandled: () -> Unit,
+    onSignOut: () -> Unit,
+) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
     var showSettings by remember { mutableStateOf(false) }
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
@@ -182,6 +206,14 @@ fun KhaataApp(viewModel: FinanceViewModel, onSignOut: () -> Unit) {
         budgetProgress.any { it.status == com.khaata.app.data.model.BudgetStatus.WATCHING } -> Gold
         budgetProgress.isNotEmpty() -> com.khaata.app.ui.theme.Green
         else -> com.khaata.app.ui.theme.NavySoft
+    }
+
+    LaunchedEffect(openEntryTabRequested) {
+        if (openEntryTabRequested) {
+            showSettings = false
+            activeTab = KhaataTab.ENTRY
+            onOpenEntryTabHandled()
+        }
     }
 
     Scaffold(
