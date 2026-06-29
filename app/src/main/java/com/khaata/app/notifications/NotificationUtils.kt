@@ -7,6 +7,10 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.khaata.app.R
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Intent
+import java.util.Calendar
 
 const val KHAATA_NOTIFICATION_CHANNEL_ID = "khaata_reminders"
 const val BUDGET_WARNING_NOTIFICATION_ID = 1001
@@ -52,4 +56,39 @@ fun showMilestoneNotification(context: Context, id: Int, title: String, body: St
         .build()
 
     NotificationManagerCompat.from(context).notify(id, notification)
+}
+
+fun scheduleDailyReminder(context: Context, hour: Int, minute: Int) {
+    val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val intent = Intent(context, AlarmReceiver::class.java)
+    val pending = PendingIntent.getBroadcast(
+        context,
+        6001,
+        intent,
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE else PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    val now = Calendar.getInstance()
+    val trigger = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+        if (before(now)) add(Calendar.DAY_OF_MONTH, 1)
+    }
+
+    // Use inexact repeating for battery friendliness
+    am.setInexactRepeating(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, AlarmManager.INTERVAL_DAY, pending)
+}
+
+fun cancelDailyReminder(context: Context) {
+    val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val intent = Intent(context, AlarmReceiver::class.java)
+    val pending = PendingIntent.getBroadcast(
+        context,
+        6001,
+        intent,
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE else PendingIntent.FLAG_UPDATE_CURRENT
+    )
+    am.cancel(pending)
 }

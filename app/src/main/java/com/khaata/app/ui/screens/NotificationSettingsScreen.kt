@@ -20,6 +20,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import android.app.TimePickerDialog
+import java.util.Calendar
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,10 +34,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import com.khaata.app.notifications.TEST_NOTIFICATION_ID
 import com.khaata.app.notifications.loadReminderSettings
 import com.khaata.app.notifications.saveReminderSettings
+import com.khaata.app.notifications.scheduleDailyReminder
+import com.khaata.app.notifications.cancelDailyReminder
 import com.khaata.app.notifications.showReminderNotification
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.Muted
@@ -48,9 +53,16 @@ import com.khaata.app.viewmodel.FinanceViewModel
 fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var settings by remember { mutableStateOf(loadReminderSettings(context)) }
+    var hour by remember { mutableStateOf(settings.dailyReminderHour) }
+    var minute by remember { mutableStateOf(settings.dailyReminderMinute) }
 
     LaunchedEffect(settings) {
         saveReminderSettings(context, settings)
+        if (settings.dailyReminderEnabled) {
+            scheduleDailyReminder(context, settings.dailyReminderHour, settings.dailyReminderMinute)
+        } else {
+            cancelDailyReminder(context)
+        }
     }
 
     Column(
@@ -59,7 +71,7 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
             }
             Text("Notification settings", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         }
@@ -83,6 +95,52 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
             checked = settings.goalMilestonesEnabled,
             onCheckedChange = { settings = settings.copy(goalMilestonesEnabled = it) }
         )
+
+        // Daily logging reminder
+        Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Daily logging reminder", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Remind me to add today's entries at ${String.format("%02d:%02d", hour, minute)}",
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Switch(
+                        checked = settings.dailyReminderEnabled,
+                        onCheckedChange = { enabled ->
+                            settings = settings.copy(dailyReminderEnabled = enabled, dailyReminderHour = hour, dailyReminderMinute = minute)
+                        }
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Button(onClick = {
+                        val c = Calendar.getInstance()
+                        val picker = TimePickerDialog(
+                            context,
+                            { _, h, m ->
+                                hour = h
+                                minute = m
+                                settings = settings.copy(dailyReminderHour = hour, dailyReminderMinute = minute)
+                            },
+                            settings.dailyReminderHour,
+                            settings.dailyReminderMinute,
+                            true
+                        )
+                        picker.show()
+                    }, colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper)) {
+                        Text("Change time")
+                    }
+                }
+            }
+        }
 
         Spacer(Modifier.height(6.dp))
         Button(
