@@ -6,12 +6,15 @@ import android.content.pm.PackageManager
 import android.content.Intent
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -45,7 +48,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -221,26 +226,48 @@ fun KhaataApp(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text("Khaata", fontWeight = FontWeight.Bold) },
+                    title = {
+                        Text(
+                            "Khaata",
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
                     actions = {
                         IconButton(onClick = { showSettings = !showSettings }) {
                             Icon(Icons.Filled.Settings, contentDescription = "Open settings", tint = Paper)
-                        }
-                        if (showMonthNav) {
-                            IconButton(onClick = { viewModel.goToMonth(-1) }) {
-                                Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous month", tint = Paper)
-                            }
-                            Text(monthLabel(viewedMonthKey), color = Paper, modifier = Modifier.padding(horizontal = 2.dp))
-                            IconButton(onClick = { viewModel.goToMonth(1) }) {
-                                Icon(Icons.Filled.ChevronRight, contentDescription = "Next month", tint = Paper)
-                            }
                         }
                         IconButton(onClick = onSignOut) {
                             Icon(Icons.Filled.Logout, contentDescription = "Sign out", tint = Paper)
                         }
                     }
                 )
+                if (showMonthNav) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Ink)
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { viewModel.goToMonth(-1) }) {
+                            Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous month", tint = Paper)
+                        }
+                        Text(
+                            monthLabel(viewedMonthKey),
+                            color = Paper,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                        IconButton(onClick = { viewModel.goToMonth(1) }) {
+                            Icon(Icons.Filled.ChevronRight, contentDescription = "Next month", tint = Paper)
+                        }
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -255,8 +282,16 @@ fun KhaataApp(
                     NavigationBarItem(
                         selected = activeTab == tab,
                         onClick = { activeTab = tab },
+                        alwaysShowLabel = false,
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
+                        label = {
+                            Text(
+                                tab.label,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Gold,
                             selectedTextColor = Gold,

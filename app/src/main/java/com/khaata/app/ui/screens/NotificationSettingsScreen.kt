@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -66,7 +68,10 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -140,21 +145,6 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
                     }
                 }
             }
-        }
-
-        Spacer(Modifier.height(6.dp))
-        Button(
-            onClick = {
-                showReminderNotification(
-                    context,
-                    TEST_NOTIFICATION_ID,
-                    "Test notification",
-                    "This is a test reminder from Khaata."
-                )
-            },
-            colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper)
-        ) {
-            Text("Send test notification")
         }
     }
 }
