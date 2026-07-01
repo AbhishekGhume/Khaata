@@ -44,6 +44,9 @@ import com.khaata.app.notifications.saveReminderSettings
 import com.khaata.app.notifications.scheduleDailyReminder
 import com.khaata.app.notifications.cancelDailyReminder
 import com.khaata.app.notifications.showReminderNotification
+import com.khaata.app.onboarding.resetAllTutorials
+import com.khaata.app.ui.theme.GoldSoft
+import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.Paper
@@ -143,6 +146,38 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
                     }, colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper)) {
                         Text("Change time")
                     }
+                }
+            }
+        }
+
+        // ── In-app tutorial controls ──────────────────────────────────────
+        var tutorialsReset by remember { mutableStateOf(false) }
+        Surface(color = GoldSoft, border = BorderStroke(1.dp, Gold.copy(alpha = 0.4f)), shape = RoundedCornerShape(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("In-app tips & tutorials", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        if (tutorialsReset) "Tips will show again when you visit each screen."
+                        else "Each screen shows a quick tip the first time you open it. Tap to see them again.",
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Button(
+                    onClick = {
+                        resetAllTutorials(context)
+                        tutorialsReset = true
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Paper),
+                    enabled = !tutorialsReset
+                ) {
+                    Text(if (tutorialsReset) "Done!" else "Replay")
                 }
             }
         }

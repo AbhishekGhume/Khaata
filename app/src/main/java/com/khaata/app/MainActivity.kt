@@ -67,6 +67,14 @@ import com.khaata.app.data.repository.FinanceRepository
 import com.khaata.app.notifications.ReminderWorker
 import com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY
 import com.khaata.app.notifications.ensureNotificationChannel
+import com.khaata.app.onboarding.OnboardingScreen
+import com.khaata.app.onboarding.hasTutorialBeenSeen
+import com.khaata.app.onboarding.isOnboardingComplete
+import com.khaata.app.onboarding.markTutorialSeen
+import com.khaata.app.onboarding.resetAllTutorials
+import com.khaata.app.tutorial.TutorialContent
+import com.khaata.app.tutorial.TutorialOverlay
+import androidx.compose.material.icons.filled.HelpOutline
 import com.khaata.app.ui.screens.AddEntryScreen
 import com.khaata.app.ui.screens.AnalyticsScreen
 import com.khaata.app.ui.screens.AuthScreen
@@ -109,6 +117,7 @@ class MainActivity : FragmentActivity() {
                 var uid by remember { mutableStateOf<String?>(null) }
                 var checkedSession by remember { mutableStateOf(false) }
                 var unlocked by remember { mutableStateOf(false) }
+                var onboardingDone by remember { mutableStateOf(false) }
                 val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
                 ) { }
@@ -137,31 +146,41 @@ class MainActivity : FragmentActivity() {
                     !checkedSession -> LoadingScreen()
                     uid == null -> AuthScreen()
                     !unlocked -> SecurityGateScreen(
-                        onUnlocked = { unlocked = true },
+                        onUnlocked = {
+                            unlocked = true
+                            onboardingDone = isOnboardingComplete(this@MainActivity)
+                        },
                         onSignOut = { FirebaseAuth.getInstance().signOut() }
                     )
                     else -> {
                         val viewModel: FinanceViewModel = viewModel(
                             factory = FinanceViewModelFactory(FinanceRepository(uid!!))
                         )
-                        LaunchedEffect(uid) {
-                            val request = PeriodicWorkRequestBuilder<ReminderWorker>(24, TimeUnit.HOURS)
-                                .build()
-                            WorkManager.getInstance(this@MainActivity).enqueueUniquePeriodicWork(
-                                "khaata_daily_reminders",
-                                ExistingPeriodicWorkPolicy.UPDATE,
-                                request
+                        if (!onboardingDone) {
+                            OnboardingScreen(
+                                viewModel = viewModel,
+                                onComplete = { onboardingDone = true }
+                            )
+                        } else {
+                            LaunchedEffect(uid) {
+                                val request = PeriodicWorkRequestBuilder<ReminderWorker>(24, TimeUnit.HOURS)
+                                    .build()
+                                WorkManager.getInstance(this@MainActivity).enqueueUniquePeriodicWork(
+                                    "khaata_daily_reminders",
+                                    ExistingPeriodicWorkPolicy.UPDATE,
+                                    request
+                                )
+                            }
+                            KhaataApp(
+                                viewModel,
+                                openEntryTabRequested = openEntryTabRequested,
+                                onOpenEntryTabHandled = { openEntryTabRequested = false },
+                                onSignOut = {
+                                    unlocked = false
+                                    FirebaseAuth.getInstance().signOut()
+                                }
                             )
                         }
-                        KhaataApp(
-                            viewModel,
-                            openEntryTabRequested = openEntryTabRequested,
-                            onOpenEntryTabHandled = { openEntryTabRequested = false },
-                            onSignOut = {
-                                unlocked = false
-                                FirebaseAuth.getInstance().signOut()
-                            }
-                        )
                     }
                 }
             }
@@ -213,6 +232,18 @@ fun KhaataApp(
         else -> com.khaata.app.ui.theme.NavySoft
     }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var activeTutorialScreenId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(activeTab, showSettings) {
+        if (!showSettings) {
+            val screenId = tutorialIdFor(activeTab)
+            if (screenId != null && !hasTutorialBeenSeen(context, screenId)) {
+                activeTutorialScreenId = screenId
+            }
+        }
+    }
+
     LaunchedEffect(openEntryTabRequested) {
         if (openEntryTabRequested) {
             showSettings = false
@@ -236,6 +267,12 @@ fun KhaataApp(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
                     actions = {
+                        IconButton(onClick = {
+                            val screenId = tutorialIdFor(activeTab)
+                            if (!showSettings && screenId != null) activeTutorialScreenId = screenId
+                        }) {
+                            Icon(Icons.Filled.HelpOutline, contentDescription = "Show help for this screen", tint = Paper)
+                        }
                         IconButton(onClick = { showSettings = !showSettings }) {
                             Icon(Icons.Filled.Settings, contentDescription = "Open settings", tint = Paper)
                         }
@@ -323,6 +360,28 @@ fun KhaataApp(
                     }
                 }
             }
+            // Tutorial overlay — shown on top of any screen, never blocks
+            // navigation. Dismissed when the user taps "Got it" or "Skip".
+            val currentTutorialId = activeTutorialScreenId
+            if (currentTutorialId != null) {
+                TutorialOverlay(
+                    steps = TutorialContent.stepsFor(currentTutorialId),
+                    onDismiss = {
+                        markTutorialSeen(context, currentTutorialId)
+                        activeTutorialScreenId = null
+                    }
+                )
+            }
         }
     }
+}
+
+/** Maps a nav tab to the tutorial screen id, or null if that tab has no tutorial. */
+private fun tutorialIdFor(tab: KhaataTab): String? = when (tab) {
+    KhaataTab.DASHBOARD -> TutorialContent.DASHBOARD
+    KhaataTab.ANALYTICS -> TutorialContent.ANALYTICS
+    KhaataTab.BUDGETS   -> TutorialContent.BUDGETS
+    KhaataTab.ENTRY     -> TutorialContent.ADD_ENTRY
+    KhaataTab.GOALS     -> TutorialContent.GOALS
+    KhaataTab.HISTORY   -> TutorialContent.HISTORY
 }
