@@ -10,11 +10,13 @@ import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
 import com.khaata.app.data.model.buildBudgetProgress
+import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
 import com.khaata.app.data.model.monthKeyFromDate
 import com.khaata.app.data.model.shiftMonth
 import com.khaata.app.data.model.todayStr
 import com.khaata.app.data.repository.FinanceRepository
+import java.time.LocalDate
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -92,7 +94,13 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     }
 
     fun addGoal(name: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {
+        if (validateGoalTarget(null, targetAmount, targetDate) != null) return@launch
         repository.addGoal(Goal(name = name, targetAmount = targetAmount, targetDate = targetDate, createdAt = todayStr()))
+    }
+
+    fun updateGoalTarget(goalId: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {
+        if (validateGoalTarget(goalId, targetAmount, targetDate) != null) return@launch
+        repository.updateGoalTarget(goalId, targetAmount, targetDate)
     }
 
     fun deleteGoal(goalId: String) = viewModelScope.launch {
@@ -104,11 +112,77 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     }
 
     fun setBudget(category: String, limitAmount: Double) = viewModelScope.launch {
+        if (_viewedMonthKey.value != currentMonthKey()) return@launch
+        if (validateBudgetLimit(category, limitAmount) != null) return@launch
         repository.setBudget(_viewedMonthKey.value, category, limitAmount)
     }
 
     fun deleteBudget(category: String) = viewModelScope.launch {
+        if (_viewedMonthKey.value != currentMonthKey()) return@launch
         repository.deleteBudget(_viewedMonthKey.value, category)
+    }
+
+    fun validateBudgetLimit(category: String, limitAmount: Double): String? {
+        if (_viewedMonthKey.value != currentMonthKey()) {
+            return "Budgets can be changed only for the current month."
+        }
+        if (limitAmount <= 0.0) return "Budget amount must be greater than zero."
+
+        val income = monthSummary.value.income
+        val otherBudgetsTotal = budgets.value
+            .filterNot { it.category == category }
+            .sumOf { it.limitAmount }
+        val newBudgetsTotal = otherBudgetsTotal + limitAmount
+        val monthlyGoalNeed = requiredMonthlyGoalSavings(goals.value)
+
+        if (newBudgetsTotal > income + 0.001) {
+            return "Total budgets cannot be greater than this month's income."
+        }
+        if (newBudgetsTotal + monthlyGoalNeed > income + 0.001) {
+            return "Budgets plus monthly goal requirement exceed this month's income."
+        }
+        return null
+    }
+
+    fun validateGoalTarget(goalId: String?, targetAmount: Double, targetDate: String): String? {
+        if (targetAmount <= 0.0) return "Goal target amount must be greater than zero."
+        if (targetDate.isBlank()) return "Goal target date is required."
+        if (runCatching { LocalDate.parse(targetDate) }.isFailure) {
+            return "Goal target date must be a valid date."
+        }
+
+        val income = monthSummary.value.income
+        val proposedGoal = goals.value.firstOrNull { it.id == goalId }
+            ?.copy(targetAmount = targetAmount, targetDate = targetDate)
+            ?: Goal(
+                id = goalId ?: "",
+                name = "",
+                targetAmount = targetAmount,
+                targetDate = targetDate,
+                createdAt = todayStr()
+            )
+
+        val updatedGoals = if (goalId != null && goals.value.any { it.id == goalId }) {
+            goals.value.map { if (it.id == goalId) proposedGoal else it }
+        } else {
+            goals.value + proposedGoal
+        }
+
+        val budgetsTotal = budgets.value.sumOf { it.limitAmount }
+        val newMonthlyGoalNeed = requiredMonthlyGoalSavings(updatedGoals)
+
+        if (newMonthlyGoalNeed > income + 0.001) {
+            return "Monthly goal requirement cannot be greater than this month's income."
+        }
+        if (budgetsTotal + newMonthlyGoalNeed > income + 0.001) {
+            return "Budgets plus monthly goal requirement exceed this month's income."
+        }
+        return null
+    }
+
+    private fun requiredMonthlyGoalSavings(goalList: List<Goal>): Double {
+        val monthKey = currentMonthKey()
+        return goalList.sumOf { it.computeStats(monthKey).requiredMonthly }
     }
 }
 

@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.BudgetProgress
 import com.khaata.app.data.model.BudgetStatus
+import com.khaata.app.data.model.currentMonthKey
 import com.khaata.app.data.model.monthLabel
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Green
@@ -70,9 +71,11 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
     val budgets by viewModel.budgets.collectAsState()
+    val isCurrentMonth = viewedMonthKey == currentMonthKey()
 
     var category by remember { mutableStateOf(CATEGORIES.first().key) }
     var limitDraft by remember { mutableStateOf("") }
+    var budgetError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -93,9 +96,17 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
             Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(12.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Create / update budget for ${monthLabel(viewedMonthKey)}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    if (!isCurrentMonth) {
+                        Text(
+                            "Past and future months are read-only. Switch to the current month to create or edit caps.",
+                            color = Muted,
+                            fontSize = 12.sp
+                        )
+                    }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         CATEGORIES.forEach { meta ->
                             Button(
+                                enabled = isCurrentMonth,
                                 onClick = { category = meta.key },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (category == meta.key) meta.color else PaperLine,
@@ -114,11 +125,20 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                             modifier = Modifier.widthIn(min = 160.dp)
                         )
                         Button(
+                            enabled = isCurrentMonth,
                             onClick = {
                                 val amount = limitDraft.toDoubleOrNull()
                                 if (amount != null && amount > 0) {
-                                    viewModel.setBudget(category, amount)
-                                    limitDraft = ""
+                                    val validationError = viewModel.validateBudgetLimit(category, amount)
+                                    if (validationError == null) {
+                                        viewModel.setBudget(category, amount)
+                                        budgetError = null
+                                        limitDraft = ""
+                                    } else {
+                                        budgetError = validationError
+                                    }
+                                } else {
+                                    budgetError = "Enter a valid budget amount."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = com.khaata.app.ui.theme.Paper)
@@ -127,6 +147,13 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                             Spacer(Modifier.width(4.dp))
                             Text("Save")
                         }
+                    }
+                    if (budgetError != null) {
+                        Text(
+                            budgetError!!,
+                            color = Rust,
+                            fontSize = 12.sp
+                        )
                     }
                     Text(
                         "Budgets here are monthly and tied to the currently viewed month.",
@@ -147,9 +174,11 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
             }
         } else {
             items(budgetProgress, key = { it.category }) { progress ->
-                BudgetProgressCard(progress) {
-                    viewModel.deleteBudget(progress.category)
-                }
+                BudgetProgressCard(
+                    progress = progress,
+                    canDelete = isCurrentMonth,
+                    onDelete = { viewModel.deleteBudget(progress.category) }
+                )
             }
         }
 
@@ -168,7 +197,10 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                             Text(meta.label, fontWeight = FontWeight.SemiBold)
                             Text("Cap ${formatINR(budget.limitAmount)}", color = Muted, fontSize = 12.sp)
                         }
-                        TextButtonLikeDelete(onClick = { viewModel.deleteBudget(budget.category) })
+                        TextButtonLikeDelete(
+                            enabled = isCurrentMonth,
+                            onClick = { viewModel.deleteBudget(budget.category) }
+                        )
                     }
                 }
             }
@@ -177,7 +209,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
 }
 
 @Composable
-private fun BudgetProgressCard(progress: BudgetProgress, onDelete: () -> Unit) {
+private fun BudgetProgressCard(progress: BudgetProgress, canDelete: Boolean, onDelete: () -> Unit) {
     val meta = categoryMeta(progress.category)
     val (bg, fg, label) = when (progress.status) {
         BudgetStatus.ON_TRACK -> Triple(GreenSoft, Green, "On track")
@@ -194,7 +226,7 @@ private fun BudgetProgressCard(progress: BudgetProgress, onDelete: () -> Unit) {
                     Text(meta.label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(label, color = fg, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
-                IconButton(onClick = onDelete) {
+                IconButton(onClick = onDelete, enabled = canDelete) {
                     Icon(Icons.Filled.Delete, contentDescription = "Delete budget", tint = Rust)
                 }
             }
@@ -247,8 +279,8 @@ private fun BoxWithColor(color: androidx.compose.ui.graphics.Color) {
 }
 
 @Composable
-private fun TextButtonLikeDelete(onClick: () -> Unit) {
-    TextButton(onClick = onClick) {
+private fun TextButtonLikeDelete(enabled: Boolean, onClick: () -> Unit) {
+    TextButton(onClick = onClick, enabled = enabled) {
         Icon(Icons.Filled.Delete, contentDescription = null, tint = Rust, modifier = Modifier.size(16.dp))
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,6 +71,15 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
     val goalStats = remember(goals) { goals.map { it to it.computeStats(currentMonthKey()) } }
     val totalRequiredMonthly = goalStats.filter { !it.second.achieved }.sumOf { it.second.requiredMonthly }
     val totalContributedThisMonth = goalStats.sumOf { it.second.contributedThisMonth }
+
+    // Key calculation: how much of the net savings is already earmarked for goals THIS month?
+    // This is what the user is actually asking when they say "I saved 16360, why does my
+    // net savings still say 24420?" — they want to see the allocation clearly.
+    val goalsCommittedThisMonth = goals.sumOf { g ->
+        g.monthlyContributions[viewedMonthKey] ?: 0.0
+    }
+    val freeAvailable = monthSummary.netSavings - goalsCommittedThisMonth
+
     val shortfall = totalRequiredMonthly - monthSummary.netSavings
     val budgetSpent = budgetProgress.sumOf { it.spentAmount }
     val budgetLimit = budgetProgress.sumOf { it.limitAmount }
@@ -79,29 +91,99 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
+        // ── Summary cards ──────────────────────────────────────────────────
         item {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SummaryCard(modifier = Modifier.widthIn(min = 150.dp), label = "Income", value = formatINR(monthSummary.income))
-                SummaryCard(modifier = Modifier.widthIn(min = 150.dp), label = "Kharcha", value = formatINR(monthSummary.totalExpenses), accent = Rust)
+            FlowRow(
+                maxItemsInEachRow = 2,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 SummaryCard(
-                    modifier = Modifier.widthIn(min = 150.dp),
+                    modifier = Modifier.weight(1f),
+                    label = "Income",
+                    value = formatINR(monthSummary.income)
+                )
+                SummaryCard(
+                    modifier = Modifier.weight(1f),
+                    label = "Kharcha",
+                    value = formatINR(monthSummary.totalExpenses),
+                    accent = Rust
+                )
+                SummaryCard(
+                    modifier = Modifier.weight(1f),
                     label = "Net Savings",
                     value = formatINR(monthSummary.netSavings),
                     accent = if (monthSummary.netSavings >= 0) Green else Rust,
                     sub = if (monthSummary.netSavings < 0) "spent more than earned" else null
                 )
-                if (budgetProgress.isNotEmpty()) {
-                    SummaryCard(
-                        modifier = Modifier.widthIn(min = 150.dp),
-                        label = "Budget usage",
-                        value = formatINR(budgetSpent),
-                        accent = if (overBudgets > 0) Rust else if (watchingBudgets > 0) Gold else Green,
-                        sub = "of ${formatINR(budgetLimit)} across ${budgetProgress.size} caps"
-                    )
+                SummaryCard(
+                    modifier = Modifier.weight(1f),
+                    label = "Budget usage",
+                    value = formatINR(budgetSpent),
+                    accent = if (overBudgets > 0) Rust else if (watchingBudgets > 0) Gold else Green,
+                    sub = if (budgetProgress.isEmpty()) {
+                        "No caps set yet"
+                    } else {
+                        "of ${formatINR(budgetLimit)} across ${budgetProgress.size} caps"
+                    }
+                )
+            }
+        }
+
+        // ── Savings breakdown card ─────────────────────────────────────────
+        // This is the "missing link" between Net Savings and Goals.
+        // Shows the user exactly where their surplus is going, so they
+        // don't feel like their goal contributions disappeared.
+        if (goalsCommittedThisMonth > 0.0 || goals.isNotEmpty()) {
+            item {
+                Surface(
+                    color = PaperCard,
+                    border = BorderStroke(1.dp, PaperLine),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "Savings breakdown",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = Muted
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        SavingsBreakdownRow(
+                            label = "Net savings",
+                            value = formatINR(monthSummary.netSavings),
+                            color = if (monthSummary.netSavings >= 0) Green else Rust,
+                            isBold = true
+                        )
+                        if (goalsCommittedThisMonth > 0.0) {
+                            HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 4.dp))
+                            SavingsBreakdownRow(
+                                label = "Committed to goals",
+                                value = "− ${formatINR(goalsCommittedThisMonth)}",
+                                color = Gold,
+                                isBold = false
+                            )
+                            HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 4.dp))
+                            SavingsBreakdownRow(
+                                label = "Freely available",
+                                value = formatINR(freeAvailable),
+                                color = if (freeAvailable >= 0) Green else Rust,
+                                isBold = true
+                            )
+                        } else {
+                            HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 4.dp))
+                            Text(
+                                "No goal contributions logged for this month yet.",
+                                color = Muted,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
                 }
             }
         }
 
+        // ── Budget health ─────────────────────────────────────────────────
         if (budgetProgress.isNotEmpty()) {
             item {
                 val warningText = when {
@@ -124,13 +206,14 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
             }
         }
 
+        // ── Goals pace ────────────────────────────────────────────────────
         if (isCurrentMonth && goalStats.isNotEmpty()) {
             item {
                 val onPace = shortfall <= 0
                 Surface(color = if (onPace) GreenSoft else RustSoft, shape = RoundedCornerShape(10.dp)) {
                     Text(
                         if (onPace)
-                            "Nice \u2014 your net savings this month cover what's needed to stay on pace for all your goals (${formatINR(totalRequiredMonthly)} required, ${formatINR(totalContributedThisMonth)} already logged)."
+                            "Nice — your net savings this month cover what's needed to stay on pace for all your goals (${formatINR(totalRequiredMonthly)} required, ${formatINR(totalContributedThisMonth)} already logged)."
                         else
                             "You need about ${formatINR(shortfall)} more in savings this month to stay on pace for all your goals. So far you've put ${formatINR(totalContributedThisMonth)} toward them.",
                         modifier = Modifier.padding(12.dp),
@@ -141,12 +224,14 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
         } else if (!isCurrentMonth && goalStats.isNotEmpty()) {
             item {
                 Text(
-                    "Viewing a different month \u2014 switch to the current month to see if you're on pace for your goals.",
-                    color = Muted, fontSize = 12.5.sp
+                    "Viewing a different month — switch to the current month to see if you're on pace for your goals.",
+                    color = Muted,
+                    fontSize = 12.5.sp
                 )
             }
         }
 
+        // ── Spend breakdown ───────────────────────────────────────────────
         item { Text("Where the kharcha went", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
         if (categoryTotals.isEmpty()) {
             item { Text("No expenses logged for this month yet.", color = Muted, fontSize = 13.sp) }
@@ -167,10 +252,14 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
             }
         }
 
+        // ── Goal cards ────────────────────────────────────────────────────
         if (goals.isNotEmpty()) {
             item { Text("Your goals", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
             item {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     goalStats.forEach { (goal, stats) ->
                         Surface(
                             color = PaperCard,
@@ -186,7 +275,21 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
                                 Spacer(Modifier.width(12.dp))
                                 Column {
                                     Text(goal.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                    Text("${formatINR(goal.savedAmount)} of ${formatINR(goal.targetAmount)}", color = Muted, fontSize = 12.sp)
+                                    Text(
+                                        "${formatINR(goal.savedAmount)} of ${formatINR(goal.targetAmount)}",
+                                        color = Muted,
+                                        fontSize = 12.sp
+                                    )
+                                    // Show this month's contribution right on the Dashboard card
+                                    val thisMonthAmount = goal.monthlyContributions[viewedMonthKey] ?: 0.0
+                                    if (thisMonthAmount > 0.0) {
+                                        Text(
+                                            "${formatINR(thisMonthAmount)} saved this month",
+                                            color = Green,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
                                     Spacer(Modifier.height(4.dp))
                                     StatusBadge(stats.status)
                                 }
@@ -196,5 +299,33 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SavingsBreakdownRow(
+    label: String,
+    value: String,
+    color: androidx.compose.ui.graphics.Color,
+    isBold: Boolean,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = 13.sp,
+            color = if (isBold) com.khaata.app.ui.theme.Ink else Muted,
+            fontWeight = if (isBold) FontWeight.SemiBold else FontWeight.Normal
+        )
+        Text(
+            value,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+            color = color
+        )
     }
 }

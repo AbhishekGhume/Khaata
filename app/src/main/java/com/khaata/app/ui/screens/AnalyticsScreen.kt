@@ -1,6 +1,5 @@
 package com.khaata.app.ui.screens
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -10,16 +9,15 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,65 +26,96 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.khaata.app.data.model.AnalyticsSnapshot
-import com.khaata.app.data.model.BudgetStatus
-import com.khaata.app.data.model.Expense
-import com.khaata.app.data.model.Goal
-import com.khaata.app.data.model.GoalStats
-import com.khaata.app.data.model.GoalStatus
-import com.khaata.app.data.model.MonthlyAnalyticsPoint
-import com.khaata.app.data.model.computeStats
-import com.khaata.app.data.model.currentMonthKey
-import com.khaata.app.data.model.forecast
+import com.khaata.app.data.model.MonthSummary
 import com.khaata.app.data.model.monthLabel
-import com.khaata.app.ui.components.ProgressStamp
-import com.khaata.app.ui.components.StatusBadge
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Green
-import com.khaata.app.ui.theme.GreenSoft
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.PaperCard
 import com.khaata.app.ui.theme.PaperLine
 import com.khaata.app.ui.theme.Rust
-import com.khaata.app.ui.theme.RustSoft
-import com.khaata.app.util.categoryMeta
 import com.khaata.app.util.formatINR
 import com.khaata.app.viewmodel.FinanceViewModel
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AnalyticsScreen(viewModel: FinanceViewModel) {
-    val analytics by viewModel.analytics.collectAsState()
-    val goals by viewModel.goals.collectAsState()
+    val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
+    val monthSummary by viewModel.monthSummary.collectAsState()
+    val allMonths by viewModel.allMonths.collectAsState()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
+    val goals by viewModel.goals.collectAsState()
 
-    val trendMonths = remember(analytics.months) { analytics.months.takeLast(6) }
-    val bestMonth = analytics.bestMonthKey?.let { key -> analytics.months.find { it.monthKey == key } }
-    val worstMonth = analytics.worstMonthKey?.let { key -> analytics.months.find { it.monthKey == key } }
-    val goalStats = remember(goals) { goals.map { it to it.computeStats(currentMonthKey()) } }
-    val goalForecasts = remember(goals) { goals.map { it.forecast() } }
+    val sortedMonths = remember(allMonths) { allMonths.sortedBy { it.monthKey } }
+    val previousMonth = remember(viewedMonthKey, sortedMonths) {
+        sortedMonths.filter { it.monthKey < viewedMonthKey }.maxByOrNull { it.monthKey }
+    }
+
+    val yearKey = viewedMonthKey.take(4)
+    val yearMonthsTillNow = remember(viewedMonthKey, sortedMonths) {
+        sortedMonths.filter { it.monthKey.startsWith("$yearKey-") && it.monthKey <= viewedMonthKey }
+    }
+    val previousMonthsSnapshot = remember(viewedMonthKey, sortedMonths) {
+        sortedMonths.filter { it.monthKey < viewedMonthKey }.takeLast(3).reversed()
+    }
+    val graphMonths = remember(viewedMonthKey, sortedMonths) {
+        sortedMonths.filter { it.monthKey <= viewedMonthKey }.takeLast(6)
+    }
+
+    val yearIncome = yearMonthsTillNow.sumOf { it.income }
+    val yearExpense = yearMonthsTillNow.sumOf { it.totalExpenses }
+    val yearNet = yearIncome - yearExpense
+    val avgYearNet = if (yearMonthsTillNow.isEmpty()) 0.0 else yearNet / yearMonthsTillNow.size
+
+    val goalsSavedByMonth = remember(goals) {
+        val totals = mutableMapOf<String, Double>()
+        goals.forEach { goal ->
+            goal.monthlyContributions.forEach { (monthKey, amount) ->
+                totals[monthKey] = (totals[monthKey] ?: 0.0) + amount
+            }
+        }
+        totals
+    }
+
+    val goalsSavedInViewedMonth = goalsSavedByMonth[viewedMonthKey] ?: 0.0
+    val freeAvailableThisMonth = monthSummary.netSavings - goalsSavedInViewedMonth
+    val goalsSavedThisYear = goals.sumOf { goal ->
+        goal.monthlyContributions
+            .filterKeys { it.startsWith("$yearKey-") && it <= viewedMonthKey }
+            .values
+            .sum()
+    }
+    val yearFree = yearNet - goalsSavedThisYear
+
+    val budgetSpent = budgetProgress.sumOf { it.spentAmount }
+    val budgetLimit = budgetProgress.sumOf { it.limitAmount }
+    val overBudgets = budgetProgress.count { it.status.name == "OVER" }
+
+    val plainInsight = when {
+        monthSummary.income <= 0.0 -> "Set this month's income first so analytics can guide you better."
+        monthSummary.netSavings < 0.0 -> "You are spending more than income this month. Try reducing kharcha in top categories."
+        overBudgets > 0 -> "Some budgets are crossed. Prioritize only essential spending for the rest of this month."
+        goals.isNotEmpty() && goalsSavedInViewedMonth <= 0.0 -> "You have goals but no savings logged for this month yet. Even a small amount helps."
+        else -> "You are on a healthy track this month. Keep logging regularly for better insights."
+    }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Analytics", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Easy Analytics", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 Text(
-                    "A month-over-month view of income, spending, savings rate, and goal pace.",
+                    "Simple money view for ${monthLabel(viewedMonthKey)}. Use month selector to check previous months.",
                     color = Muted,
                     fontSize = 13.sp
                 )
@@ -94,136 +123,181 @@ fun AnalyticsScreen(viewModel: FinanceViewModel) {
         }
 
         item {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard(
-                    label = "Average savings rate",
-                    value = if (analytics.averageSavingsRate > 0.0) "${analytics.averageSavingsRate.toInt()}%" else "No income yet",
-                    accent = if (analytics.averageSavingsRate >= 30.0) Green else Gold,
-                    sub = "Net savings as a share of income"
-                )
-                MetricCard(
-                    label = "Best month",
-                    value = bestMonth?.let { monthLabel(it.monthKey) } ?: "Not enough data",
-                    accent = Green,
-                    sub = bestMonth?.let { formatINR(it.netSavings) } ?: "Track more months"
-                )
-                MetricCard(
-                    label = "Worst month",
-                    value = worstMonth?.let { monthLabel(it.monthKey) } ?: "Not enough data",
-                    accent = Rust,
-                    sub = worstMonth?.let { formatINR(it.netSavings) } ?: "Track more months"
-                )
-                MetricCard(
-                    label = "Latest net savings",
-                    value = trendMonths.lastOrNull()?.let { formatINR(it.netSavings) } ?: formatINR(0.0),
-                    accent = if ((trendMonths.lastOrNull()?.netSavings ?: 0.0) >= 0.0) Green else Rust,
-                    sub = trendMonths.lastOrNull()?.monthKey?.let { monthLabel(it) } ?: "No months yet"
+            AnalyticsSection(
+                title = "This month (${monthLabel(viewedMonthKey)})",
+                subtitle = "How things stand till now"
+            ) {
+                FlowRow(
+                    maxItemsInEachRow = 2,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SimpleMetricCard(Modifier.weight(1f), "Income", formatINR(monthSummary.income), "Money received", Green)
+                    SimpleMetricCard(Modifier.weight(1f), "Kharcha", formatINR(monthSummary.totalExpenses), "Spent till now", Rust)
+                    SimpleMetricCard(Modifier.weight(1f), "Saved to goals", formatINR(goalsSavedInViewedMonth), "Logged this month", Gold)
+                    SimpleMetricCard(
+                        Modifier.weight(1f),
+                        "Free amount",
+                        formatINR(freeAvailableThisMonth),
+                        "Can be used freely now",
+                        if (freeAvailableThisMonth >= 0) Green else Rust
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Net savings before goal allocation: ${formatINR(monthSummary.netSavings)}",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
                 )
             }
         }
 
         item {
-            AnalyticsCard(title = "Budget summary", subtitle = "Budgets and trends together") {
+            AnalyticsSection(
+                title = "Simple graph view",
+                subtitle = "Quick visuals anyone can understand"
+            ) {
+                Text("Where this month's income went", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                IncomeSplitBar(
+                    income = monthSummary.income,
+                    kharcha = monthSummary.totalExpenses,
+                    goalsSaved = goalsSavedInViewedMonth,
+                    freeAmount = freeAvailableThisMonth
+                )
+                Spacer(Modifier.height(6.dp))
+                Text("Red: kharcha  Gold: goals  Green: free", color = Muted, fontSize = 11.sp)
+
+                Spacer(Modifier.height(14.dp))
+                Text("Free amount trend (last ${graphMonths.size} months)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                if (graphMonths.isEmpty()) {
+                    Text("No month data yet.", color = Muted, fontSize = 12.sp)
+                } else {
+                    FreeTrendGraph(
+                        months = graphMonths,
+                        goalsSavedByMonth = goalsSavedByMonth
+                    )
+                }
+            }
+        }
+
+        item {
+            AnalyticsSection(
+                title = "Budget status (till now)",
+                subtitle = "Quick check of your monthly caps"
+            ) {
+                FlowRow(
+                    maxItemsInEachRow = 2,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SimpleMetricCard(Modifier.weight(1f), "Budget used", formatINR(budgetSpent), "Spent under budgets", Green)
+                    SimpleMetricCard(Modifier.weight(1f), "Budget limit", formatINR(budgetLimit), "Total cap set", Gold)
+                }
                 if (budgetProgress.isEmpty()) {
-                    EmptyState("No budgets for the current month yet.")
+                    Spacer(Modifier.height(8.dp))
+                    Text("No budget caps set for this month.", color = Muted, fontSize = 12.sp)
+                } else if (overBudgets > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("$overBudgets categories are over budget.", color = Rust, fontSize = 12.sp)
+                }
+            }
+        }
+
+        item {
+            AnalyticsSection(
+                title = "Compared to previous month",
+                subtitle = "Selected month vs last month"
+            ) {
+                if (previousMonth == null) {
+                    Text("No previous month data available yet.", color = Muted, fontSize = 12.sp)
                 } else {
-                    val overCount = budgetProgress.count { it.status == BudgetStatus.OVER }
-                    val watchCount = budgetProgress.count { it.status == BudgetStatus.WATCHING }
-                    val projectedRunoutCount = budgetProgress.count { it.projectedRunout }
-                    val budgetSpent = budgetProgress.sumOf { it.spentAmount }
-                    val budgetLimit = budgetProgress.sumOf { it.limitAmount }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        MetricCard("Budget spent", formatINR(budgetSpent), if (overCount > 0) Rust else Green, "Across ${budgetProgress.size} caps")
-                        MetricCard("Budget limit", formatINR(budgetLimit), Gold, if (watchCount > 0) "$watchCount near warning" else "No active warnings")
-                        MetricCard("Over budget", "$overCount", if (overCount > 0 || projectedRunoutCount > 0) Rust else Green, "Categories past or near runout")
-                        MetricCard("Runout risk", "$projectedRunoutCount", if (projectedRunoutCount > 0) Rust else Green, "Likely to run out before month end")
+                    val netDelta = monthSummary.netSavings - previousMonth.netSavings
+                    val previousGoalsSaved = goalsSavedByMonth[previousMonth.monthKey] ?: 0.0
+                    val previousFree = previousMonth.netSavings - previousGoalsSaved
+                    ComparisonRow("Income", monthSummary.income, previousMonth.income)
+                    HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 6.dp))
+                    ComparisonRow("Kharcha", monthSummary.totalExpenses, previousMonth.totalExpenses)
+                    HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 6.dp))
+                    ComparisonRow("Net savings", monthSummary.netSavings, previousMonth.netSavings)
+                    HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 6.dp))
+                    ComparisonRow("Free available", freeAvailableThisMonth, previousFree)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (netDelta >= 0.0) {
+                            "Good: net savings improved by ${formatINR(netDelta)} from previous month."
+                        } else {
+                            "Alert: net savings dropped by ${formatINR(kotlin.math.abs(netDelta))} from previous month."
+                        },
+                        color = if (netDelta >= 0.0) Green else Rust,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
+        item {
+            AnalyticsSection(
+                title = "Previous months snapshot",
+                subtitle = "Last 3 months before selected month"
+            ) {
+                if (previousMonthsSnapshot.isEmpty()) {
+                    Text("No older months found.", color = Muted, fontSize = 12.sp)
+                } else {
+                    previousMonthsSnapshot.forEachIndexed { index, month ->
+                        MonthLine(month)
+                        if (index != previousMonthsSnapshot.lastIndex) {
+                            HorizontalDivider(color = PaperLine, modifier = Modifier.padding(vertical = 6.dp))
+                        }
                     }
                 }
             }
         }
 
         item {
-            AnalyticsCard(title = "Trend line", subtitle = "Income vs kharcha vs net savings across the latest months") {
-                if (trendMonths.isEmpty()) {
-                    EmptyState("No history yet. Log a few months of income and expenses first.")
-                } else {
-                    TrendChart(points = trendMonths)
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        SeriesLegend(color = Green, label = "Income")
-                        SeriesLegend(color = Rust, label = "Kharcha")
-                        SeriesLegend(color = Gold, label = "Net savings")
-                    }
+            AnalyticsSection(
+                title = "Yearly summary ($yearKey)",
+                subtitle = "From January till selected month"
+            ) {
+                FlowRow(
+                    maxItemsInEachRow = 2,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SimpleMetricCard(Modifier.weight(1f), "Total income", formatINR(yearIncome), "Year till now", Green)
+                    SimpleMetricCard(Modifier.weight(1f), "Total kharcha", formatINR(yearExpense), "Year till now", Rust)
+                    SimpleMetricCard(Modifier.weight(1f), "Net savings", formatINR(yearNet), "Year till now", if (yearNet >= 0) Green else Rust)
+                    SimpleMetricCard(Modifier.weight(1f), "Free till now", formatINR(yearFree), "After goal savings", if (yearFree >= 0) Green else Rust)
                 }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Saved to goals in $yearKey till now: ${formatINR(goalsSavedThisYear)} · Avg net/month: ${formatINR(avgYearNet)}",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
             }
         }
 
         item {
-            AnalyticsCard(title = "Savings rate by month", subtitle = "Percent of income kept each month") {
-                if (trendMonths.isEmpty()) {
-                    EmptyState("No monthly savings data yet.")
-                } else {
-                    trendMonths.forEach { month ->
-                        SavingsRateRow(month.monthKey, month.savingsRate)
-                        Spacer(Modifier.height(8.dp))
-                    }
-                }
-            }
-        }
-
-        item {
-            AnalyticsCard(title = "Category trend", subtitle = "Latest month vs previous month") {
-                if (analytics.categoryTrends.isEmpty()) {
-                    EmptyState("Add at least two months of expenses to compare categories.")
-                } else {
-                    analytics.categoryTrends.forEachIndexed { index, trend ->
-                        val meta = categoryMeta(trend.categoryKey)
-                        CategoryTrendRow(
-                            label = meta.label,
-                            color = meta.color,
-                            current = trend.currentAmount,
-                            previous = trend.previousAmount,
-                            delta = trend.delta,
-                            deltaPct = trend.deltaPct
-                        )
-                        if (index != analytics.categoryTrends.lastIndex) Spacer(Modifier.height(10.dp))
-                    }
-                }
-            }
-        }
-
-        item {
-            AnalyticsCard(title = "Biggest movers", subtitle = "Top expenses logged in the latest month") {
-                if (analytics.biggestExpenses.isEmpty()) {
-                    EmptyState("No expenses logged in the latest month yet.")
-                } else {
-                    analytics.biggestExpenses.forEachIndexed { index, expense ->
-                        BigExpenseRow(expense)
-                        if (index != analytics.biggestExpenses.lastIndex) Spacer(Modifier.height(10.dp))
-                    }
-                }
-            }
-        }
-
-        item {
-            AnalyticsCard(title = "Goal velocity", subtitle = "Forecasted hit date based on recent monthly pace") {
-                if (goals.isEmpty()) {
-                    EmptyState("Add a goal first to see a velocity forecast.")
-                } else {
-                    goalForecasts.forEachIndexed { index, forecast ->
-                        val goal = goals.first { it.id == forecast.goalId }
-                        val stats = goalStats.first { it.first.id == goal.id }.second
-                        GoalVelocityRow(goal = goal, stats = stats, forecastHitDate = forecast.estimatedHitDate, avgMonthly = forecast.averageMonthlyContribution)
-                        if (index != goalForecasts.lastIndex) Spacer(Modifier.height(10.dp))
-                    }
-                }
+            AnalyticsSection(
+                title = "What to do now",
+                subtitle = "Simple next step"
+            ) {
+                Text(plainInsight, fontSize = 13.sp)
             }
         }
     }
 }
 
 @Composable
-private fun AnalyticsCard(title: String, subtitle: String, content: @Composable () -> Unit) {
+private fun AnalyticsSection(
+    title: String,
+    subtitle: String,
+    content: @Composable () -> Unit,
+) {
     Surface(
         color = PaperCard,
         border = BorderStroke(1.dp, PaperLine),
@@ -232,25 +306,30 @@ private fun AnalyticsCard(title: String, subtitle: String, content: @Composable 
     ) {
         Column(Modifier.padding(14.dp)) {
             Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-            Spacer(Modifier.height(2.dp))
             Text(subtitle, color = Muted, fontSize = 12.sp)
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             content()
         }
     }
 }
 
 @Composable
-private fun MetricCard(label: String, value: String, accent: Color, sub: String) {
+private fun SimpleMetricCard(
+    modifier: Modifier,
+    label: String,
+    value: String,
+    sub: String,
+    accent: androidx.compose.ui.graphics.Color,
+) {
     Surface(
         color = PaperCard,
         border = BorderStroke(1.dp, PaperLine),
         shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.widthIn(min = 150.dp)
+        modifier = modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Text(label.uppercase(), color = Muted, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(5.dp))
             Text(value, color = accent, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
             Text(sub, color = Muted, fontSize = 11.sp)
@@ -259,186 +338,152 @@ private fun MetricCard(label: String, value: String, accent: Color, sub: String)
 }
 
 @Composable
-private fun SeriesLegend(color: Color, label: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).background(color, RoundedCornerShape(50)))
-        Spacer(Modifier.width(6.dp))
-        Text(label, fontSize = 12.sp, color = Muted)
-    }
-}
-
-@Composable
-private fun TrendChart(points: List<MonthlyAnalyticsPoint>) {
-    val chartHeight = 220.dp
-    Column(Modifier.fillMaxWidth()) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(chartHeight)
-                .padding(top = 10.dp, bottom = 26.dp)
-        ) {
-            val values = points.flatMap { listOf(it.income, it.expenses, it.netSavings) }
-            val minValue = min(0.0, values.minOrNull() ?: 0.0)
-            val maxValue = max(1.0, values.maxOrNull() ?: 1.0)
-            val range = max(1.0, maxValue - minValue)
-            val stepX = if (points.size <= 1) 0f else size.width / (points.size - 1)
-            val plotHeight = size.height - 12f
-
-            fun yFor(value: Double): Float {
-                val normalized = ((value - minValue) / range).coerceIn(0.0, 1.0)
-                return (plotHeight - (normalized * plotHeight)).toFloat()
-            }
-
-            fun drawSeries(color: Color, selector: (MonthlyAnalyticsPoint) -> Double) {
-                val path = Path()
-                points.forEachIndexed { index, point ->
-                    val x = index * stepX
-                    val y = yFor(selector(point))
-                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                drawPath(path = path, color = color, style = Stroke(width = 4f))
-                points.forEachIndexed { index, point ->
-                    val x = index * stepX
-                    val y = yFor(selector(point))
-                    drawCircle(color = color, radius = 4.5f, center = Offset(x, y))
-                }
-            }
-
-            drawSeries(Green) { it.income }
-            drawSeries(Rust) { it.expenses }
-            drawSeries(Gold) { it.netSavings }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            points.forEach { month ->
-                Text(
-                    monthLabel(month.monthKey),
-                    fontSize = 10.5.sp,
-                    color = Muted,
-                    modifier = Modifier.widthIn(min = 48.dp),
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SavingsRateRow(monthKey: String, savingsRate: Double) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text(monthLabel(monthKey), fontSize = 12.5.sp, modifier = Modifier.weight(1f))
-            Text("${savingsRate.toInt()}%", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, color = if (savingsRate >= 0) Green else Rust)
-        }
-        Spacer(Modifier.height(5.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .background(PaperLine, RoundedCornerShape(50))
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(fraction = (abs(savingsRate) / 100.0).toFloat().coerceIn(0f, 1f))
-                    .height(8.dp)
-                    .background(if (savingsRate >= 0) Green else Rust, RoundedCornerShape(50))
-            )
-        }
-    }
-}
-
-@Composable
-private fun CategoryTrendRow(
-    label: String,
-    color: Color,
-    current: Double,
-    previous: Double,
-    delta: Double,
-    deltaPct: Double
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Box(Modifier.size(10.dp).background(color, RoundedCornerShape(50)))
-            Spacer(Modifier.width(8.dp))
-            Text(label, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-            Text(formatINR(current), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(5.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("Last month ${formatINR(previous)}", color = Muted, fontSize = 11.5.sp, modifier = Modifier.weight(1f))
-            Text(
-                if (delta >= 0) "+${formatINR(delta)}" else "-${formatINR(abs(delta))}",
-                color = if (delta >= 0) Rust else Green,
-                fontSize = 11.5.sp,
-                fontFamily = FontFamily.Monospace
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "(${if (deltaPct >= 0) "+" else ""}${deltaPct.toInt()}%)",
-                color = if (delta >= 0) Rust else Green,
-                fontSize = 11.5.sp,
-                fontFamily = FontFamily.Monospace
-            )
-        }
-    }
-}
-
-@Composable
-private fun BigExpenseRow(expense: Expense) {
-    val meta = categoryMeta(expense.category)
+private fun ComparisonRow(label: String, current: Double, previous: Double) {
+    val diff = current - previous
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Box(Modifier.size(10.dp).background(meta.color, RoundedCornerShape(50)))
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(meta.label, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-            Text(
-                if (expense.note.isBlank()) expense.date else "${expense.note} · ${expense.date}",
-                color = Muted,
-                fontSize = 11.5.sp,
-                maxLines = 1
-            )
-        }
-        Text(formatINR(expense.amount), fontFamily = FontFamily.Monospace, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+        Text(
+            "Now ${formatINR(current)}",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = Muted
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (diff >= 0.0) "+${formatINR(diff)}" else "-${formatINR(kotlin.math.abs(diff))}",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = if (label == "Kharcha") {
+                if (diff > 0.0) Rust else Green
+            } else {
+                if (diff > 0.0) Green else Rust
+            }
+        )
     }
 }
 
 @Composable
-private fun GoalVelocityRow(goal: Goal, stats: GoalStats, forecastHitDate: String?, avgMonthly: Double) {
-    Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            ProgressStamp(
-                pct = stats.pct,
-                color = if (stats.achieved) Green else if (stats.status == GoalStatus.BEHIND) Rust else Gold,
-                size = 56.dp
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(goal.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                    StatusBadge(stats.status)
-                }
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    if (forecastHitDate != null) {
-                        "At your current pace, you should hit this goal around $forecastHitDate."
-                    } else {
-                        "Log a few contributions first so I can forecast a hit date."
-                    },
-                    color = Muted,
-                    fontSize = 12.sp
+private fun MonthLine(month: MonthSummary) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f)) {
+            Text(monthLabel(month.monthKey), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text("Income ${formatINR(month.income)}", color = Muted, fontSize = 11.5.sp)
+        }
+        Text(
+            "Net ${formatINR(month.netSavings)}",
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            color = if (month.netSavings >= 0) Green else Rust,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun IncomeSplitBar(
+    income: Double,
+    kharcha: Double,
+    goalsSaved: Double,
+    freeAmount: Double,
+) {
+    if (income <= 0.0) {
+        Text("Add income to see this graph.", color = Muted, fontSize = 12.sp)
+        return
+    }
+
+    val spentPart = kharcha.coerceAtLeast(0.0).coerceAtMost(income)
+    val goalsPart = goalsSaved.coerceAtLeast(0.0).coerceAtMost((income - spentPart).coerceAtLeast(0.0))
+    val freePart = freeAmount.coerceAtLeast(0.0).coerceAtMost((income - spentPart - goalsPart).coerceAtLeast(0.0))
+
+    Surface(
+        color = PaperLine,
+        shape = RoundedCornerShape(50),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(14.dp)
+    ) {
+        Row(Modifier.fillMaxSize()) {
+            if (spentPart > 0.0) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .weight(spentPart.toFloat())
+                        .background(Rust)
                 )
-                Spacer(Modifier.height(5.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Saved ${formatINR(goal.savedAmount)}", fontSize = 12.sp)
-                    Text("Avg ${formatINR(avgMonthly)}/mo", fontSize = 12.sp)
-                    Text("Remaining ${formatINR((goal.targetAmount - goal.savedAmount).coerceAtLeast(0.0))}", fontSize = 12.sp)
-                }
+            }
+            if (goalsPart > 0.0) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .weight(goalsPart.toFloat())
+                        .background(Gold)
+                )
+            }
+            if (freePart > 0.0) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .weight(freePart.toFloat())
+                        .background(Green)
+                )
             }
         }
     }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "Income ${formatINR(income)} = Kharcha ${formatINR(spentPart)} + Goals ${formatINR(goalsPart)} + Free ${formatINR(freePart)}",
+        color = Muted,
+        fontSize = 11.sp,
+        fontFamily = FontFamily.Monospace
+    )
 }
 
 @Composable
-private fun EmptyState(message: String) {
-    Text(message, color = Muted, fontSize = 12.5.sp)
+private fun FreeTrendGraph(
+    months: List<MonthSummary>,
+    goalsSavedByMonth: Map<String, Double>,
+) {
+    val freeByMonth = months.associate { month ->
+        month.monthKey to (month.netSavings - (goalsSavedByMonth[month.monthKey] ?: 0.0))
+    }
+    val maxAbs = max(1.0, freeByMonth.values.maxOfOrNull { abs(it) } ?: 1.0)
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        months.forEach { month ->
+            val free = freeByMonth[month.monthKey] ?: 0.0
+            val barColor = if (free >= 0.0) Green else Rust
+            val fraction = (abs(free) / maxAbs).toFloat().coerceIn(0f, 1f)
+
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    monthLabel(month.monthKey).take(3),
+                    color = Muted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.width(34.dp)
+                )
+                Surface(
+                    color = PaperLine,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(10.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(fraction)
+                            .background(barColor, RoundedCornerShape(50))
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    formatINR(free),
+                    color = barColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier.width(82.dp)
+                )
+            }
+        }
+    }
 }

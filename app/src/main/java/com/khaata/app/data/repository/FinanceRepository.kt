@@ -323,6 +323,15 @@ class FinanceRepository(private val uid: String) {
         ).await()
     }
 
+    suspend fun updateGoalTarget(goalId: String, targetAmount: Double, targetDate: String) {
+        goalsRef().document(goalId).update(
+            mapOf(
+                "targetAmount" to targetAmount,
+                "targetDate" to targetDate
+            )
+        ).await()
+    }
+
     suspend fun deleteGoal(goalId: String) {
         val goalRef = goalsRef().document(goalId)
         val contribs = goalRef.collection("contributions").get().await()

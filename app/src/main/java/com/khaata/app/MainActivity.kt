@@ -6,35 +6,45 @@ import android.content.pm.PackageManager
 import android.content.Intent
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.ShowChart
-import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -61,6 +71,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.firebase.auth.FirebaseAuth
+import com.khaata.app.data.model.currentMonthKey
 import com.khaata.app.data.model.monthLabel
 import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.repository.FinanceRepository
@@ -74,7 +85,6 @@ import com.khaata.app.onboarding.markTutorialSeen
 import com.khaata.app.onboarding.resetAllTutorials
 import com.khaata.app.tutorial.TutorialContent
 import com.khaata.app.tutorial.TutorialOverlay
-import androidx.compose.material.icons.filled.HelpOutline
 import com.khaata.app.ui.screens.AddEntryScreen
 import com.khaata.app.ui.screens.AnalyticsScreen
 import com.khaata.app.ui.screens.AuthScreen
@@ -87,17 +97,19 @@ import com.khaata.app.ui.screens.NotificationSettingsScreen
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.KhaataTheme
+import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.MutedOnInk
 import com.khaata.app.ui.theme.NavySoft
 import com.khaata.app.ui.theme.Paper
+import com.khaata.app.ui.theme.Rust
 import com.khaata.app.viewmodel.FinanceViewModel
 import com.khaata.app.viewmodel.FinanceViewModelFactory
 import java.util.concurrent.TimeUnit
 
 enum class KhaataTab(val label: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Filled.Home),
-    ANALYTICS("Analytics", Icons.Filled.ShowChart),
-    BUDGETS("Budgets", Icons.Filled.ListAlt),
+    ANALYTICS("Analytics", Icons.AutoMirrored.Filled.ShowChart),
+    BUDGETS("Budgets", Icons.AutoMirrored.Filled.ListAlt),
     ENTRY("Add Entry", Icons.Filled.Add),
     GOALS("Goals", Icons.Filled.Flag),
     HISTORY("History", Icons.Filled.History),
@@ -220,9 +232,13 @@ fun KhaataApp(
 ) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
     var showSettings by remember { mutableStateOf(false) }
+    var showSignOutConfirm by remember { mutableStateOf(false) }
+    var showMoreSheet by remember { mutableStateOf(false) }
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
+    val isViewingCurrentMonth = viewedMonthKey == currentMonthKey()
+    val canGoToNextMonth = viewedMonthKey < currentMonthKey()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
-    val showMonthNav = !showSettings && (activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY)
+    val showMonthNav = !showSettings && (activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY || activeTab == KhaataTab.BUDGETS || activeTab == KhaataTab.ANALYTICS)
     val projectedRunoutCount = budgetProgress.count { it.projectedRunout }
     val overCount = budgetProgress.count { it.status == com.khaata.app.data.model.BudgetStatus.OVER }
     val stripColor = when {
@@ -233,6 +249,15 @@ fun KhaataApp(
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+    val primaryTabs = remember {
+        listOf(
+            KhaataTab.DASHBOARD,
+            KhaataTab.ANALYTICS,
+            KhaataTab.BUDGETS,
+            KhaataTab.ENTRY,
+            KhaataTab.GOALS
+        )
+    }
     var activeTutorialScreenId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(activeTab, showSettings) {
@@ -271,13 +296,10 @@ fun KhaataApp(
                             val screenId = tutorialIdFor(activeTab)
                             if (!showSettings && screenId != null) activeTutorialScreenId = screenId
                         }) {
-                            Icon(Icons.Filled.HelpOutline, contentDescription = "Show help for this screen", tint = Paper)
+                            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Show help for this screen", tint = Paper)
                         }
-                        IconButton(onClick = { showSettings = !showSettings }) {
-                            Icon(Icons.Filled.Settings, contentDescription = "Open settings", tint = Paper)
-                        }
-                        IconButton(onClick = onSignOut) {
-                            Icon(Icons.Filled.Logout, contentDescription = "Sign out", tint = Paper)
+                        IconButton(onClick = { showMoreSheet = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "Open more options", tint = Paper)
                         }
                     }
                 )
@@ -300,8 +322,21 @@ fun KhaataApp(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 4.dp)
                         )
-                        IconButton(onClick = { viewModel.goToMonth(1) }) {
+                        IconButton(
+                            enabled = canGoToNextMonth,
+                            onClick = { viewModel.goToMonth(1) }
+                        ) {
                             Icon(Icons.Filled.ChevronRight, contentDescription = "Next month", tint = Paper)
+                        }
+                        if (!isViewingCurrentMonth) {
+                            IconButton(onClick = { viewModel.jumpToMonth(currentMonthKey()) }) {
+                                Text(
+                                    "Now",
+                                    color = Paper,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
                 }
@@ -315,7 +350,7 @@ fun KhaataApp(
         },
         bottomBar = {
             NavigationBar(containerColor = Ink, contentColor = Paper) {
-                KhaataTab.entries.forEach { tab ->
+                primaryTabs.forEach { tab ->
                     NavigationBarItem(
                         selected = activeTab == tab,
                         onClick = { activeTab = tab },
@@ -371,6 +406,125 @@ fun KhaataApp(
                         activeTutorialScreenId = null
                     }
                 )
+            }
+            if (showSignOutConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showSignOutConfirm = false },
+                    title = { Text("Sign out?") },
+                    text = { Text("You will need to unlock again on next open.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showSignOutConfirm = false
+                            onSignOut()
+                        }) {
+                            Text("Sign out")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showSignOutConfirm = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+            if (showMoreSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showMoreSheet = false }
+                ) {
+                    Text(
+                        "NAVIGATION",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                    )
+                    ListItem(
+                        headlineContent = { Text("History") },
+                        leadingContent = {
+                            Icon(Icons.Filled.History, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    showSettings = false
+                                    activeTab = KhaataTab.HISTORY
+                                }
+                            }
+                    )
+                    HorizontalDivider()
+                    Text(
+                        "APP",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                    )
+                    ListItem(
+                        headlineContent = { Text("Settings") },
+                        leadingContent = {
+                            Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    showSettings = true
+                                }
+                            }
+                    )
+                    HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("Reset tutorials") },
+                        leadingContent = {
+                            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        supportingContent = { Text("Show onboarding tips again") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    resetAllTutorials(context)
+                                    showMoreSheet = false
+                                }
+                            }
+                    )
+                    HorizontalDivider()
+                    Text(
+                        "SAFETY",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                    )
+                    ListItem(
+                        headlineContent = { Text("Sign out", color = Rust) },
+                        supportingContent = { Text("Requires unlock on next open", color = Muted) },
+                        leadingContent = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Logout,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = Rust
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    showSignOutConfirm = true
+                                }
+                            }
+                    )
+                    Spacer(Modifier.height(18.dp))
+                }
             }
         }
     }
