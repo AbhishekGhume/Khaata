@@ -12,18 +12,22 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Flag
@@ -43,6 +47,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,11 +61,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import java.time.YearMonth
+import java.time.format.TextStyle
+import java.util.Locale
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -95,12 +105,15 @@ import com.khaata.app.ui.screens.BudgetsScreen
 import com.khaata.app.ui.screens.SecurityGateScreen
 import com.khaata.app.ui.screens.NotificationSettingsScreen
 import com.khaata.app.ui.theme.Gold
+import com.khaata.app.ui.theme.GoldSoft
+import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.KhaataTheme
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.MutedOnInk
 import com.khaata.app.ui.theme.NavySoft
 import com.khaata.app.ui.theme.Paper
+import com.khaata.app.ui.theme.PaperCard
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.viewmodel.FinanceViewModel
 import com.khaata.app.viewmodel.FinanceViewModelFactory
@@ -259,6 +272,7 @@ fun KhaataApp(
         )
     }
     var activeTutorialScreenId by remember { mutableStateOf<String?>(null) }
+    var showMonthYearPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeTab, showSettings) {
         if (!showSettings) {
@@ -308,37 +322,86 @@ fun KhaataApp(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(Ink)
-                            .padding(bottom = 8.dp),
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { viewModel.goToMonth(-1) }) {
-                            Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous month", tint = Paper)
-                        }
-                        Text(
-                            monthLabel(viewedMonthKey),
-                            color = Paper,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        )
-                        IconButton(
-                            enabled = canGoToNextMonth,
-                            onClick = { viewModel.goToMonth(1) }
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(NavySoft),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Filled.ChevronRight, contentDescription = "Next month", tint = Paper)
+                            IconButton(
+                                onClick = { viewModel.goToMonth(-1) },
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.ChevronLeft,
+                                    contentDescription = "Previous month",
+                                    tint = Paper,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { showMonthYearPicker = true }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    .widthIn(min = 108.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Filled.CalendarMonth,
+                                    contentDescription = "Pick a month",
+                                    tint = Gold,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    monthLabel(viewedMonthKey),
+                                    color = Paper,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(
+                                enabled = canGoToNextMonth,
+                                onClick = { viewModel.goToMonth(1) },
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.ChevronRight,
+                                    contentDescription = "Next month",
+                                    tint = if (canGoToNextMonth) Paper else MutedOnInk,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                         if (!isViewingCurrentMonth) {
-                            IconButton(onClick = { viewModel.jumpToMonth(currentMonthKey()) }) {
+                            Spacer(modifier = Modifier.width(10.dp))
+                            TextButton(onClick = { viewModel.jumpToMonth(currentMonthKey()) }) {
                                 Text(
-                                    "Now",
-                                    color = Paper,
+                                    "Today",
+                                    color = Gold,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 12.sp
                                 )
                             }
                         }
                     }
+                }
+                if (showMonthYearPicker) {
+                    MonthYearPickerDialog(
+                        selectedMonthKey = viewedMonthKey,
+                        onDismiss = { showMonthYearPicker = false },
+                        onSelect = { key ->
+                            viewModel.jumpToMonth(key)
+                            showMonthYearPicker = false
+                        }
+                    )
                 }
                 Box(
                     modifier = Modifier
@@ -524,6 +587,146 @@ fun KhaataApp(
                             }
                     )
                     Spacer(Modifier.height(18.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthYearPickerDialog(
+    selectedMonthKey: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    val selectedYearMonth = remember(selectedMonthKey) { YearMonth.parse(selectedMonthKey) }
+    val currentYearMonth = remember { YearMonth.now() }
+    var pickerYear by remember(selectedMonthKey) { mutableStateOf(selectedYearMonth.year) }
+    val monthShortNames = remember {
+        (1..12).map { java.time.Month.of(it).getDisplayName(TextStyle.SHORT, Locale.ENGLISH) }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = PaperCard
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    "Jump to month",
+                    color = Ink,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Pick any month to view its ledger",
+                    color = Muted,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(GoldSoft)
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { pickerYear -= 1 }) {
+                        Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous year", tint = Ink)
+                    }
+                    Text(
+                        pickerYear.toString(),
+                        color = Ink,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    IconButton(
+                        enabled = pickerYear < currentYearMonth.year,
+                        onClick = { pickerYear += 1 }
+                    ) {
+                        Icon(
+                            Icons.Filled.ChevronRight,
+                            contentDescription = "Next year",
+                            tint = if (pickerYear < currentYearMonth.year) Ink else Muted
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (row in 0 until 4) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            for (col in 0 until 3) {
+                                val monthNum = row * 3 + col + 1
+                                val candidate = YearMonth.of(pickerYear, monthNum)
+                                val isFuture = candidate.isAfter(currentYearMonth)
+                                val isSelected = candidate == selectedYearMonth
+                                val isCurrent = candidate == currentYearMonth
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .aspectRatio(1.5f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            when {
+                                                isSelected -> Gold
+                                                isFuture -> PaperCard
+                                                else -> GoldSoft.copy(alpha = 0.55f)
+                                            }
+                                        )
+                                        .then(
+                                            if (isFuture) Modifier else Modifier.clickable {
+                                                onSelect(candidate.toString())
+                                            }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            monthShortNames[monthNum - 1],
+                                            color = when {
+                                                isSelected -> Paper
+                                                isFuture -> Muted.copy(alpha = 0.4f)
+                                                else -> Ink
+                                            },
+                                            fontWeight = if (isSelected || isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                            fontSize = 13.sp
+                                        )
+                                        if (isCurrent && !isSelected) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .padding(top = 2.dp)
+                                                    .size(4.dp)
+                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .background(Green)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = Muted, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(onClick = { onSelect(currentYearMonth.toString()) }) {
+                        Text("Today", color = Green, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
