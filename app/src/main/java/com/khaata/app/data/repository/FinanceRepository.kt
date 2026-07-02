@@ -1,5 +1,6 @@
 package com.khaata.app.data.repository
 
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -332,13 +333,34 @@ class FinanceRepository(private val uid: String) {
         ).await()
     }
 
+    /**
+     * Firestore doesn't cascade-delete subcollections when a parent document is
+     * deleted, and the client SDK has no way to list a document's subcollections
+     * (that's only available server-side, e.g. via the Admin SDK in a Cloud
+     * Function). So every place that deletes a document with known subcollections
+     * must explicitly delete those subcollections' documents itself — which is
+     * what this helper centralizes.
+     *
+     * A single Firestore batch caps out at 500 write operations, so for goals with
+     * a lot of logged contributions we split the deletes into chunks of 450 and
+     * commit each chunk as its own batch. Each chunk is still atomic; a goal with
+     * more than 500 contributions just won't delete as a single all-or-nothing
+     * operation across chunks (an acceptable tradeoff — Firestore has no way to
+     * make a >500-op delete atomic in one shot).
+     */
+    private suspend fun deleteInChunks(refs: List<DocumentReference>, chunkSize: Int = 450) {
+        refs.chunked(chunkSize).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { batch.delete(it) }
+            batch.commit().await()
+        }
+    }
+
     suspend fun deleteGoal(goalId: String) {
         val goalRef = goalsRef().document(goalId)
         val contribs = goalRef.collection("contributions").get().await()
-        val batch = db.batch()
-        for (doc in contribs.documents) batch.delete(doc.reference)
-        batch.delete(goalRef)
-        batch.commit().await()
+        val refsToDelete = contribs.documents.map { it.reference } + goalRef
+        deleteInChunks(refsToDelete)
     }
 
     suspend fun logContribution(goalId: String, monthKey: String, amount: Double, date: String) {
