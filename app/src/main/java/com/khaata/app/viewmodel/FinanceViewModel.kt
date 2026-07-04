@@ -122,34 +122,72 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
         repository.deleteBudget(_viewedMonthKey.value, category)
     }
 
+    /**
+     * HARD checks only — reasons the entry itself is invalid. Whether it
+     * happens to push the month's totals past income is NOT one of them
+     * (see budgetAllocationWarning below) — that's normal, expected budget
+     * pressure, not an error.
+     */
     fun validateBudgetLimit(category: String, limitAmount: Double): String? {
         if (_viewedMonthKey.value != currentMonthKey()) {
             return "Budgets can be changed only for the current month."
         }
         if (limitAmount <= 0.0) return "Budget amount must be greater than zero."
+        return null
+    }
 
+    /**
+     * Soft, informational check. A goal's "need per month" grows on its own
+     * as its target date gets closer, so budgets + goals can drift past
+     * income purely with the passage of time — not because of anything the
+     * user just did. That should never trap the user from saving; it
+     * should just tell them where they stand.
+     *
+     * Returns null when the new total fits inside this month's income,
+     * otherwise a friendly heads-up describing the gap. Never blocks.
+     */
+    fun budgetAllocationWarning(category: String, limitAmount: Double): String? {
         val income = monthSummary.value.income
         val otherBudgetsTotal = budgets.value
             .filterNot { it.category == category }
             .sumOf { it.limitAmount }
         val newBudgetsTotal = otherBudgetsTotal + limitAmount
         val monthlyGoalNeed = requiredMonthlyGoalSavings(goals.value)
+        val totalAllocated = newBudgetsTotal + monthlyGoalNeed
+        val over = totalAllocated - income
 
-        if (newBudgetsTotal > income + 0.001) {
-            return "Total budgets cannot be greater than this month's income."
-        }
-        if (newBudgetsTotal + monthlyGoalNeed > income + 0.001) {
-            return "Budgets plus monthly goal requirement exceed this month's income."
-        }
-        return null
+        return if (over > 0.001) {
+            "Heads up: budgets (₹${"%,.0f".format(newBudgetsTotal)}) plus this month's goal " +
+                    "savings need (₹${"%,.0f".format(monthlyGoalNeed)}) add up to " +
+                    "₹${"%,.0f".format(totalAllocated)} — about ₹${"%,.0f".format(over)} more than your " +
+                    "₹${"%,.0f".format(income)} income. You can still save it; consider trimming a " +
+                    "category or pushing a goal's date out if this doesn't feel doable."
+        } else null
     }
 
+    /**
+     * HARD checks only for a goal — basic input sanity. Whether the goal's
+     * required monthly saving is affordable given income is NOT a reason to
+     * block saving (see goalAllocationWarning below).
+     */
     fun validateGoalTarget(goalId: String?, targetAmount: Double, targetDate: String): String? {
         if (targetAmount <= 0.0) return "Goal target amount must be greater than zero."
         if (targetDate.isBlank()) return "Goal target date is required."
         if (runCatching { LocalDate.parse(targetDate) }.isFailure) {
             return "Goal target date must be a valid date."
         }
+        return null
+    }
+
+    /**
+     * Soft, informational check for goals — mirrors budgetAllocationWarning.
+     * A goal that's tight (or even over) this month's income is a real
+     * situation the app already has a name for ("behind schedule"), not an
+     * invalid one — so it's surfaced as guidance, never as a blocker.
+     */
+    fun goalAllocationWarning(goalId: String?, targetAmount: Double, targetDate: String): String? {
+        if (targetAmount <= 0.0 || targetDate.isBlank()) return null
+        if (runCatching { LocalDate.parse(targetDate) }.isFailure) return null
 
         val income = monthSummary.value.income
         val proposedGoal = goals.value.firstOrNull { it.id == goalId }
@@ -170,14 +208,16 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
 
         val budgetsTotal = budgets.value.sumOf { it.limitAmount }
         val newMonthlyGoalNeed = requiredMonthlyGoalSavings(updatedGoals)
+        val totalAllocated = budgetsTotal + newMonthlyGoalNeed
+        val over = totalAllocated - income
 
-        if (newMonthlyGoalNeed > income + 0.001) {
-            return "Monthly goal requirement cannot be greater than this month's income."
-        }
-        if (budgetsTotal + newMonthlyGoalNeed > income + 0.001) {
-            return "Budgets plus monthly goal requirement exceed this month's income."
-        }
-        return null
+        return if (over > 0.001) {
+            "Heads up: all your goals together now need ₹${"%,.0f".format(newMonthlyGoalNeed)}/month, " +
+                    "and with budgets (₹${"%,.0f".format(budgetsTotal)}) that's " +
+                    "₹${"%,.0f".format(totalAllocated)} — about ₹${"%,.0f".format(over)} more than your " +
+                    "₹${"%,.0f".format(income)} income. You can still save this goal — it'll show as " +
+                    "\"behind\" and you can catch up later or push the target date out."
+        } else null
     }
 
     private fun requiredMonthlyGoalSavings(goalList: List<Goal>): Double {

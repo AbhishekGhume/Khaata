@@ -83,6 +83,12 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
     var targetAmount by remember { mutableStateOf("") }
     var targetDate by remember { mutableStateOf("") }
     var goalFormError by remember { mutableStateOf<String?>(null) }
+    val goalFormWarning = remember(targetAmount, targetDate) {
+        val amt = targetAmount.toDoubleOrNull()
+        if (amt != null && amt > 0 && targetDate.isNotBlank()) {
+            viewModel.goalAllocationWarning(null, amt, targetDate.trim())
+        } else null
+    }
 
     var openContribGoalId by remember { mutableStateOf<String?>(null) }
     var contribAmount by remember { mutableStateOf("") }
@@ -155,6 +161,9 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                                 if (name.isNotBlank() && amt != null && amt > 0 && targetDate.isNotBlank()) {
                                     val validationError = viewModel.validateGoalTarget(null, amt, targetDate.trim())
                                     if (validationError == null) {
+                                        // Saved regardless of the allocation warning above — a tight
+                                        // or even over-income goal is a valid situation (shows as
+                                        // "behind"), not something that should trap the user.
                                         viewModel.addGoal(name.trim(), amt, targetDate.trim())
                                         goalFormError = null
                                         name = ""; targetAmount = ""; targetDate = ""; showAddForm = false
@@ -169,6 +178,8 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                         ) { Text("Save goal") }
                         if (goalFormError != null) {
                             Text(goalFormError!!, color = Rust, fontSize = 12.sp)
+                        } else if (goalFormWarning != null) {
+                            Text(goalFormWarning, color = Gold, fontSize = 12.sp)
                         }
                     }
                 }
@@ -213,6 +224,8 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                         else -> {
                             val validationError = viewModel.validateGoalTarget(goalId, amt, dateDraft)
                             if (validationError == null) {
+                                // Allocation warnings (goal need vs. income) are informational
+                                // only — they never block saving the edit.
                                 viewModel.updateGoalTarget(goalId, amt, dateDraft)
                                 null
                             } else {
@@ -220,6 +233,12 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                             }
                         }
                     }
+                },
+                allocationWarning = { goalId, amountDraft, dateDraft ->
+                    val amt = amountDraft.toDoubleOrNull()
+                    if (amt != null && amt > 0 && dateDraft.isNotBlank()) {
+                        viewModel.goalAllocationWarning(goalId, amt, dateDraft)
+                    } else null
                 },
                 onDelete = { viewModel.deleteGoal(goal.id) }
             )
@@ -240,6 +259,7 @@ private fun GoalCard(
     onContribDateChange: (String) -> Unit,
     onSaveContrib: () -> Unit,
     onSaveEdit: (goalId: String, amountDraft: String, dateDraft: String) -> String?,
+    allocationWarning: (goalId: String, amountDraft: String, dateDraft: String) -> String? = { _, _, _ -> null },
     onDelete: () -> Unit,
 ) {
     // Sort all months with contributions, newest first
@@ -429,6 +449,13 @@ private fun GoalCard(
                         }
                         if (editError != null) {
                             Text(editError!!, color = Rust, fontSize = 12.sp)
+                        } else {
+                            val liveWarning = remember(editTargetAmount, editTargetDate) {
+                                allocationWarning(goal.id, editTargetAmount, editTargetDate)
+                            }
+                            if (liveWarning != null) {
+                                Text(liveWarning, color = Gold, fontSize = 12.sp)
+                            }
                         }
                     }
                 }

@@ -76,6 +76,10 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
     var category by remember { mutableStateOf(CATEGORIES.first().key) }
     var limitDraft by remember { mutableStateOf("") }
     var budgetError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
+    val budgetWarning = remember(category, limitDraft) {
+        val amt = limitDraft.toDoubleOrNull()
+        if (amt != null && amt > 0) viewModel.budgetAllocationWarning(category, amt) else null
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -131,6 +135,8 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                                 if (amount != null && amount > 0) {
                                     val validationError = viewModel.validateBudgetLimit(category, amount)
                                     if (validationError == null) {
+                                        // Saved regardless of the allocation warning above — running
+                                        // tight against income is normal and shouldn't block the save.
                                         viewModel.setBudget(category, amount)
                                         budgetError = null
                                         limitDraft = ""
@@ -152,6 +158,12 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                         Text(
                             budgetError!!,
                             color = Rust,
+                            fontSize = 12.sp
+                        )
+                    } else if (budgetWarning != null) {
+                        Text(
+                            budgetWarning,
+                            color = Gold,
                             fontSize = 12.sp
                         )
                     }
