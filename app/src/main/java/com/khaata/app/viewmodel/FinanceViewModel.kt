@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.khaata.app.data.model.AnalyticsSnapshot
 import com.khaata.app.data.model.Budget
 import com.khaata.app.data.model.BudgetProgress
+import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
@@ -18,16 +19,38 @@ import com.khaata.app.data.model.todayStr
 import com.khaata.app.data.repository.FinanceRepository
 import java.time.LocalDate
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/**
+ * A transient, one-shot message for the UI to show in a Snackbar. [actionLabel] +
+ * [onAction] drive the optional "Undo" affordance on destructive actions.
+ */
+data class UiMessage(
+    val text: String,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null
+)
+
 class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() {
+
+    // One-shot messages (write failures, "deleted — Undo", etc.). Buffered so an
+    // emit from a background coroutine never suspends or drops silently.
+    private val _messages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 8)
+    val messages: SharedFlow<UiMessage> = _messages.asSharedFlow()
+
+    private fun postMessage(text: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
+        _messages.tryEmit(UiMessage(text, actionLabel, onAction))
+    }
 
     private val _viewedMonthKey = MutableStateFlow(currentMonthKey())
     val viewedMonthKey: StateFlow<String> = _viewedMonthKey
@@ -79,47 +102,107 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     }
 
     fun updateIncome(amount: Double) = viewModelScope.launch {
-        repository.setIncome(_viewedMonthKey.value, amount)
+        runCatching { repository.setIncome(_viewedMonthKey.value, amount) }
+            .onFailure { postMessage("Couldn't update income — check your connection and try again.") }
     }
 
     fun addExpense(category: String, amount: Double, note: String, date: String) = viewModelScope.launch {
-        repository.addExpense(
-            monthKeyFromDate(date),
-            Expense(category = category, amount = amount, note = note, date = date)
-        )
+        runCatching {
+            repository.addExpense(
+                monthKeyFromDate(date),
+                Expense(category = category, amount = amount, note = note, date = date)
+            )
+        }.onFailure { postMessage("Couldn't add the entry — nothing was saved.") }
+    }
+
+    fun updateExpense(original: Expense, category: String, amount: Double, note: String, date: String) = viewModelScope.launch {
+        runCatching {
+            repository.updateExpense(
+                oldMonthKey = monthKeyFromDate(original.date),
+                expenseId = original.id,
+                oldAmount = original.amount,
+                updated = Expense(id = original.id, category = category, amount = amount, note = note, date = date)
+            )
+        }.onFailure { postMessage("Couldn't save the changes — the entry is unchanged.") }
     }
 
     fun deleteExpense(expense: Expense) = viewModelScope.launch {
-        repository.deleteExpense(monthKeyFromDate(expense.date), expense.id, expense.amount)
+        runCatching { repository.deleteExpense(monthKeyFromDate(expense.date), expense.id, expense.amount) }
+            .onSuccess {
+                postMessage("Entry deleted.", actionLabel = "Undo") {
+                    addExpense(expense.category, expense.amount, expense.note, expense.date)
+                }
+            }
+            .onFailure { postMessage("Couldn't delete the entry.") }
     }
 
     fun addGoal(name: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {
         if (validateGoalTarget(null, targetAmount, targetDate) != null) return@launch
-        repository.addGoal(Goal(name = name, targetAmount = targetAmount, targetDate = targetDate, createdAt = todayStr()))
+        runCatching {
+            repository.addGoal(Goal(name = name, targetAmount = targetAmount, targetDate = targetDate, createdAt = todayStr()))
+        }.onFailure { postMessage("Couldn't create the goal — nothing was saved.") }
     }
 
     fun updateGoalTarget(goalId: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {
         if (validateGoalTarget(goalId, targetAmount, targetDate) != null) return@launch
-        repository.updateGoalTarget(goalId, targetAmount, targetDate)
+        runCatching { repository.updateGoalTarget(goalId, targetAmount, targetDate) }
+            .onFailure { postMessage("Couldn't update the goal.") }
     }
 
-    fun deleteGoal(goalId: String) = viewModelScope.launch {
-        repository.deleteGoal(goalId)
+    fun deleteGoal(goal: Goal) = viewModelScope.launch {
+        // Capture the contribution log first so a delete can be fully undone.
+        val contributions = runCatching { repository.getAllContributions(goal.id) }.getOrDefault(emptyList())
+        runCatching { repository.deleteGoal(goal.id) }
+            .onSuccess {
+                postMessage("\"${goal.name}\" deleted.", actionLabel = "Undo") {
+                    viewModelScope.launch {
+                        runCatching { repository.restoreGoal(goal, contributions) }
+                            .onFailure { postMessage("Couldn't restore the goal.") }
+                    }
+                }
+            }
+            .onFailure { postMessage("Couldn't delete the goal.") }
     }
 
     fun logContribution(goalId: String, amount: Double, date: String) = viewModelScope.launch {
-        repository.logContribution(goalId, monthKeyFromDate(date), amount, date)
+        runCatching { repository.logContribution(goalId, monthKeyFromDate(date), amount, date) }
+            .onFailure { postMessage("Couldn't log the contribution — nothing was saved.") }
+    }
+
+    /** Edits (or removes, when [newAmount] <= 0) the total saved for one month of a goal. */
+    fun editMonthlyContribution(goalId: String, monthKey: String, oldAmount: Double, newAmount: Double) = viewModelScope.launch {
+        runCatching { repository.editMonthlyContribution(goalId, monthKey, oldAmount, newAmount) }
+            .onSuccess {
+                if (newAmount <= 0.0) {
+                    postMessage("Contribution removed.", actionLabel = "Undo") {
+                        viewModelScope.launch {
+                            runCatching { repository.editMonthlyContribution(goalId, monthKey, 0.0, oldAmount) }
+                                .onFailure { postMessage("Couldn't restore the contribution.") }
+                        }
+                    }
+                }
+            }
+            .onFailure { postMessage("Couldn't update the contribution.") }
     }
 
     fun setBudget(category: String, limitAmount: Double) = viewModelScope.launch {
         if (_viewedMonthKey.value != currentMonthKey()) return@launch
         if (validateBudgetLimit(category, limitAmount) != null) return@launch
-        repository.setBudget(_viewedMonthKey.value, category, limitAmount)
+        runCatching { repository.setBudget(_viewedMonthKey.value, category, limitAmount) }
+            .onFailure { postMessage("Couldn't save the budget.") }
     }
 
-    fun deleteBudget(category: String) = viewModelScope.launch {
+    fun deleteBudget(category: String, limitAmount: Double) = viewModelScope.launch {
         if (_viewedMonthKey.value != currentMonthKey()) return@launch
-        repository.deleteBudget(_viewedMonthKey.value, category)
+        val monthKey = _viewedMonthKey.value
+        runCatching { repository.deleteBudget(monthKey, category) }
+            .onSuccess {
+                postMessage("Budget removed.", actionLabel = "Undo") {
+                    // Only restore if still on the same (current) month it was deleted from.
+                    if (_viewedMonthKey.value == monthKey) setBudget(category, limitAmount)
+                }
+            }
+            .onFailure { postMessage("Couldn't remove the budget.") }
     }
 
     /**

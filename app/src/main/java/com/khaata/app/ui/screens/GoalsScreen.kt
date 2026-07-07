@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -70,6 +71,8 @@ import com.khaata.app.ui.theme.PaperLine
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.util.formatINR
+import com.khaata.app.util.isMoneyInputAllowed
+import com.khaata.app.util.parsePositiveAmount
 import com.khaata.app.viewmodel.FinanceViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -93,6 +96,9 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
     var openContribGoalId by remember { mutableStateOf<String?>(null) }
     var contribAmount by remember { mutableStateOf("") }
     var contribDate by remember { mutableStateOf(todayStr()) }
+
+    // Goal pending delete confirmation.
+    var goalToDelete by remember { mutableStateOf<Goal?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -144,10 +150,10 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                         )
                         OutlinedTextField(
                             value = targetAmount,
-                            onValueChange = { targetAmount = it },
+                            onValueChange = { if (isMoneyInputAllowed(it)) targetAmount = it },
                             label = { Text("Target amount (₹)") },
                             modifier = Modifier.width(160.dp),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                         )
                         DatePickerField(
                             label = "Target date",
@@ -240,9 +246,32 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                         viewModel.goalAllocationWarning(goalId, amt, dateDraft)
                     } else null
                 },
-                onDelete = { viewModel.deleteGoal(goal.id) }
+                onEditContribution = { monthKey, oldAmount, newAmount ->
+                    viewModel.editMonthlyContribution(goal.id, monthKey, oldAmount, newAmount)
+                },
+                onDelete = { goalToDelete = goal }
             )
         }
+    }
+
+    goalToDelete?.let { goal ->
+        AlertDialog(
+            onDismissRequest = { goalToDelete = null },
+            title = { Text("Delete \"${goal.name}\"?") },
+            text = {
+                Text(
+                    "This removes the goal and its entire contribution history " +
+                        "(${formatINR(goal.savedAmount)} saved so far). You can undo right after."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteGoal(goal)
+                    goalToDelete = null
+                }) { Text("Delete", color = Rust) }
+            },
+            dismissButton = { TextButton(onClick = { goalToDelete = null }) { Text("Cancel") } }
+        )
     }
 }
 
@@ -260,6 +289,7 @@ private fun GoalCard(
     onSaveContrib: () -> Unit,
     onSaveEdit: (goalId: String, amountDraft: String, dateDraft: String) -> String?,
     allocationWarning: (goalId: String, amountDraft: String, dateDraft: String) -> String? = { _, _, _ -> null },
+    onEditContribution: (monthKey: String, oldAmount: Double, newAmount: Double) -> Unit,
     onDelete: () -> Unit,
 ) {
     // Sort all months with contributions, newest first
@@ -274,6 +304,10 @@ private fun GoalCard(
     var editTargetAmount by remember(goal.id) { mutableStateOf(goal.targetAmount.toString()) }
     var editTargetDate by remember(goal.id) { mutableStateOf(goal.targetDate) }
     var editError by remember(goal.id) { mutableStateOf<String?>(null) }
+
+    // Per-month contribution being edited / deleted (monthKey to current amount).
+    var contribToEdit by remember(goal.id) { mutableStateOf<Pair<String, Double>?>(null) }
+    var contribToDelete by remember(goal.id) { mutableStateOf<Pair<String, Double>?>(null) }
 
     Surface(
         color = PaperCard,
@@ -366,12 +400,20 @@ private fun GoalCard(
                 ContribRow(
                     monthKey = contribHistory.first().key,
                     amount = contribHistory.first().value,
-                    isLatest = true
+                    isLatest = true,
+                    onEdit = { contribToEdit = contribHistory.first().key to contribHistory.first().value },
+                    onDelete = { contribToDelete = contribHistory.first().key to contribHistory.first().value }
                 )
 
                 if (showHistory && contribHistory.size > 1) {
                     contribHistory.drop(1).forEach { (monthKey, amount) ->
-                        ContribRow(monthKey = monthKey, amount = amount, isLatest = false)
+                        ContribRow(
+                            monthKey = monthKey,
+                            amount = amount,
+                            isLatest = false,
+                            onEdit = { contribToEdit = monthKey to amount },
+                            onDelete = { contribToDelete = monthKey to amount }
+                        )
                     }
                 }
                 Spacer(Modifier.height(4.dp))
@@ -426,10 +468,10 @@ private fun GoalCard(
                     ) {
                         OutlinedTextField(
                             value = editTargetAmount,
-                            onValueChange = { editTargetAmount = it },
+                            onValueChange = { if (isMoneyInputAllowed(it)) editTargetAmount = it },
                             label = { Text("Target amount (₹)") },
                             modifier = Modifier.width(150.dp),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                         )
                         DatePickerField(
                             label = "Target date",
@@ -475,10 +517,10 @@ private fun GoalCard(
                     ) {
                         OutlinedTextField(
                             value = contribAmount,
-                            onValueChange = onContribAmountChange,
+                            onValueChange = { if (isMoneyInputAllowed(it)) onContribAmountChange(it) },
                             label = { Text("Amount (₹)") },
                             modifier = Modifier.width(130.dp),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                         )
                         DatePickerField(
                             label = "Date",
@@ -499,6 +541,66 @@ private fun GoalCard(
             }
         }
     }
+
+    contribToEdit?.let { (monthKey, current) ->
+        EditContributionDialog(
+            monthKey = monthKey,
+            currentAmount = current,
+            onDismiss = { contribToEdit = null },
+            onSave = { newAmount ->
+                onEditContribution(monthKey, current, newAmount)
+                contribToEdit = null
+            }
+        )
+    }
+
+    contribToDelete?.let { (monthKey, amount) ->
+        AlertDialog(
+            onDismissRequest = { contribToDelete = null },
+            title = { Text("Remove this contribution?") },
+            text = { Text("${formatINR(amount)} saved in ${monthLabel(monthKey)} will be removed from this goal.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onEditContribution(monthKey, amount, 0.0)
+                    contribToDelete = null
+                }) { Text("Remove", color = Rust) }
+            },
+            dismissButton = { TextButton(onClick = { contribToDelete = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+@Composable
+private fun EditContributionDialog(
+    monthKey: String,
+    currentAmount: Double,
+    onDismiss: () -> Unit,
+    onSave: (Double) -> Unit,
+) {
+    var draft by remember { mutableStateOf(if (currentAmount == 0.0) "" else currentAmount.toString()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit ${monthLabel(monthKey)} contribution") },
+        text = {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { if (isMoneyInputAllowed(it)) { draft = it; error = null } },
+                label = { Text("Amount saved (₹)") },
+                singleLine = true,
+                isError = error != null,
+                supportingText = error?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val amt = parsePositiveAmount(draft)
+                if (amt == null) error = "Enter an amount greater than 0." else onSave(amt)
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -516,7 +618,13 @@ private fun StatCell(label: String, value: String) {
  * recent save was recorded — directly answering "did my June log save?".
  */
 @Composable
-private fun ContribRow(monthKey: String, amount: Double, isLatest: Boolean) {
+private fun ContribRow(
+    monthKey: String,
+    amount: Double,
+    isLatest: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -542,5 +650,11 @@ private fun ContribRow(monthKey: String, amount: Double, isLatest: Boolean) {
             fontWeight = if (isLatest) FontWeight.SemiBold else FontWeight.Normal,
             color = if (isLatest) Green else Muted
         )
+        IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
+            Icon(Icons.Filled.Edit, contentDescription = "Edit contribution", tint = Muted, modifier = Modifier.size(15.dp))
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+            Icon(Icons.Filled.Delete, contentDescription = "Remove contribution", tint = Rust, modifier = Modifier.size(15.dp))
+        }
     }
 }

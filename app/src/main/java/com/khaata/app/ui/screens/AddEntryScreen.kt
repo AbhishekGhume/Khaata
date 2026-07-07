@@ -24,6 +24,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Divider
@@ -39,6 +41,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -71,6 +74,8 @@ import com.khaata.app.ui.theme.RustSoft
 import com.khaata.app.util.CATEGORIES
 import com.khaata.app.util.categoryMeta
 import com.khaata.app.util.formatINR
+import com.khaata.app.util.isMoneyInputAllowed
+import com.khaata.app.util.parsePositiveAmount
 import com.khaata.app.viewmodel.FinanceViewModel
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -82,12 +87,18 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
 
     var incomeDraft by remember(monthSummary.income, viewedMonthKey) { mutableStateOf(if (monthSummary.income == 0.0) "" else monthSummary.income.toString()) }
+    var incomeError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
     var date by remember { mutableStateOf(todayStr()) }
     var categoryExpanded by remember { mutableStateOf(false) }
     var category by remember { mutableStateOf("food") }
     var amount by remember { mutableStateOf("") }
+    var amountError by remember { mutableStateOf<String?>(null) }
     var note by remember { mutableStateOf("") }
     val selectedBudget = remember(category, budgetProgress) { budgetProgress.firstOrNull { it.category == category } }
+
+    // Expense being edited (opens the edit dialog) and being deleted (confirm dialog).
+    var expenseToEdit by remember { mutableStateOf<Expense?>(null) }
+    var expenseToDelete by remember { mutableStateOf<Expense?>(null) }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -98,14 +109,23 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                     FlowRow(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = incomeDraft,
-                            onValueChange = { incomeDraft = it },
+                            onValueChange = { if (isMoneyInputAllowed(it)) { incomeDraft = it; incomeError = null } },
                             placeholder = { Text("0") },
-                            modifier = Modifier.width(140.dp),
+                            modifier = Modifier.width(150.dp),
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            isError = incomeError != null,
+                            supportingText = incomeError?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                         )
                         Button(
-                            onClick = { viewModel.updateIncome(incomeDraft.toDoubleOrNull() ?: 0.0) },
+                            onClick = {
+                                val parsed = incomeDraft.trim().toDoubleOrNull()
+                                when {
+                                    incomeDraft.isBlank() -> incomeError = "Enter your income for this month."
+                                    parsed == null || parsed < 0 -> incomeError = "Enter a valid amount."
+                                    else -> { incomeError = null; viewModel.updateIncome(parsed) }
+                                }
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper)
                         ) { Text("Update") }
                         Text(
@@ -164,9 +184,13 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                 }
 
                 OutlinedTextField(
-                    value = amount, onValueChange = { amount = it }, label = { Text("Amount") },
-                    modifier = Modifier.width(120.dp), singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    value = amount,
+                    onValueChange = { if (isMoneyInputAllowed(it)) { amount = it; amountError = null } },
+                    label = { Text("Amount") },
+                    modifier = Modifier.width(140.dp), singleLine = true,
+                    isError = amountError != null,
+                    supportingText = amountError?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                 )
                 OutlinedTextField(
                     value = note, onValueChange = { note = it }, label = { Text("Note") },
@@ -174,10 +198,14 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                 )
                 Button(
                     onClick = {
-                        val amt = amount.toDoubleOrNull()
-                        if (amt != null && amt > 0 && date.isNotBlank()) {
-                            viewModel.addExpense(category, amt, note.trim(), date)
-                            amount = ""; note = ""
+                        val amt = parsePositiveAmount(amount)
+                        when {
+                            amt == null -> amountError = "Enter an amount greater than 0."
+                            date.isBlank() -> amountError = "Pick a date."
+                            else -> {
+                                viewModel.addExpense(category, amt, note.trim(), date)
+                                amount = ""; note = ""; amountError = null
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Green)
@@ -191,7 +219,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
 
         item {
             Text(
-                "${monthLabel(viewedMonthKey)} \u00b7 ${expenses.size} entries \u00b7 ${formatINR(monthSummary.totalExpenses)} total",
+                "${monthLabel(viewedMonthKey)} · ${expenses.size} entries · ${formatINR(monthSummary.totalExpenses)} total",
                 color = Muted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp
             )
         }
@@ -200,16 +228,107 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
         } else {
             items(expenses, key = { it.id }) { e ->
                 Column {
-                    ExpenseRow(e) { viewModel.deleteExpense(e) }
+                    ExpenseRow(e, onEdit = { expenseToEdit = e }, onDelete = { expenseToDelete = e })
                     HorizontalDivider(Modifier, DividerDefaults.Thickness, color = PaperLine)
                 }
             }
         }
     }
+
+    expenseToEdit?.let { editing ->
+        EditExpenseDialog(
+            expense = editing,
+            onDismiss = { expenseToEdit = null },
+            onSave = { cat, amt, noteText, dateStr ->
+                viewModel.updateExpense(editing, cat, amt, noteText, dateStr)
+                expenseToEdit = null
+            }
+        )
+    }
+
+    expenseToDelete?.let { deleting ->
+        AlertDialog(
+            onDismissRequest = { expenseToDelete = null },
+            title = { Text("Delete this entry?") },
+            text = { Text("${categoryMeta(deleting.category).label} · ${formatINR(deleting.amount)}${if (deleting.note.isNotBlank()) " · ${deleting.note}" else ""}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteExpense(deleting)
+                    expenseToDelete = null
+                }) { Text("Delete", color = Rust) }
+            },
+            dismissButton = { TextButton(onClick = { expenseToDelete = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun EditExpenseDialog(
+    expense: Expense,
+    onDismiss: () -> Unit,
+    onSave: (category: String, amount: Double, note: String, date: String) -> Unit,
+) {
+    var category by remember { mutableStateOf(expense.category) }
+    var categoryExpanded by remember { mutableStateOf(false) }
+    var amount by remember { mutableStateOf(if (expense.amount == 0.0) "" else expense.amount.toString()) }
+    var note by remember { mutableStateOf(expense.note) }
+    var date by remember { mutableStateOf(expense.date) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit entry") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DatePickerField(label = "Date", value = date, onValueChange = { date = it }, modifier = Modifier.fillMaxWidth())
+                ExposedDropdownMenuBox(expanded = categoryExpanded, onExpandedChange = { categoryExpanded = it }) {
+                    OutlinedTextField(
+                        value = categoryMeta(category).label,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                        modifier = Modifier.menuAnchor(type = MenuAnchorType.PrimaryNotEditable, enabled = true).fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = categoryExpanded, onDismissRequest = { categoryExpanded = false }) {
+                        CATEGORIES.forEach { c ->
+                            DropdownMenuItem(text = { Text(c.label) }, onClick = { category = c.key; categoryExpanded = false })
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = amount,
+                    onValueChange = { if (isMoneyInputAllowed(it)) { amount = it; error = null } },
+                    label = { Text("Amount") },
+                    singleLine = true,
+                    isError = error != null,
+                    supportingText = error?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = note, onValueChange = { note = it }, label = { Text("Note") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val amt = parsePositiveAmount(amount)
+                when {
+                    amt == null -> error = "Enter an amount greater than 0."
+                    date.isBlank() -> error = "Pick a date."
+                    else -> onSave(category, amt, note.trim(), date)
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
-private fun ExpenseRow(expense: Expense, onDelete: () -> Unit) {
+private fun ExpenseRow(expense: Expense, onEdit: () -> Unit, onDelete: () -> Unit) {
     val meta = categoryMeta(expense.category)
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -218,9 +337,12 @@ private fun ExpenseRow(expense: Expense, onDelete: () -> Unit) {
         Text(expense.date.takeLast(5), fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted, modifier = Modifier.width(50.dp))
         Box(Modifier.size(8.dp).background(meta.color, CircleShape))
         Spacer(Modifier.width(8.dp))
-        Text(meta.label, fontSize = 13.sp, modifier = Modifier.width(130.dp))
+        Text(meta.label, fontSize = 13.sp, modifier = Modifier.width(110.dp))
         Text(expense.note, fontSize = 12.sp, color = Muted, modifier = Modifier.weight(1f), maxLines = 1)
         Text(formatINR(expense.amount), fontFamily = FontFamily.Monospace, fontSize = 13.sp, modifier = Modifier.width(85.dp), textAlign = TextAlign.End)
+        IconButton(onClick = onEdit) {
+            Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = Muted, modifier = Modifier.size(17.dp))
+        }
         IconButton(onClick = onDelete) {
             Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Rust, modifier = Modifier.size(18.dp))
         }

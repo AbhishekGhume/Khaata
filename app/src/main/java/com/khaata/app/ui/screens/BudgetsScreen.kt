@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -63,6 +64,7 @@ import com.khaata.app.ui.theme.RustSoft
 import com.khaata.app.util.CATEGORIES
 import com.khaata.app.util.categoryMeta
 import com.khaata.app.util.formatINR
+import com.khaata.app.util.isMoneyInputAllowed
 import com.khaata.app.viewmodel.FinanceViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -76,6 +78,8 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
     var category by remember { mutableStateOf(CATEGORIES.first().key) }
     var limitDraft by remember { mutableStateOf("") }
     var budgetError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
+    // (category, limitAmount) of the budget pending delete confirmation.
+    var budgetToDelete by remember { mutableStateOf<Pair<String, Double>?>(null) }
     val budgetWarning = remember(category, limitDraft) {
         val amt = limitDraft.toDoubleOrNull()
         if (amt != null && amt > 0) viewModel.budgetAllocationWarning(category, amt) else null
@@ -122,10 +126,11 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = limitDraft,
-                            onValueChange = { limitDraft = it },
+                            onValueChange = { if (isMoneyInputAllowed(it)) { limitDraft = it; budgetError = null } },
                             label = { Text("Monthly cap (₹)") },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = budgetError != null,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.widthIn(min = 160.dp)
                         )
                         Button(
@@ -189,7 +194,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                 BudgetProgressCard(
                     progress = progress,
                     canDelete = isCurrentMonth,
-                    onDelete = { viewModel.deleteBudget(progress.category) }
+                    onDelete = { budgetToDelete = progress.category to progress.limitAmount }
                 )
             }
         }
@@ -211,12 +216,27 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                         }
                         TextButtonLikeDelete(
                             enabled = isCurrentMonth,
-                            onClick = { viewModel.deleteBudget(budget.category) }
+                            onClick = { budgetToDelete = budget.category to budget.limitAmount }
                         )
                     }
                 }
             }
         }
+    }
+
+    budgetToDelete?.let { (cat, limit) ->
+        AlertDialog(
+            onDismissRequest = { budgetToDelete = null },
+            title = { Text("Remove this budget?") },
+            text = { Text("${categoryMeta(cat).label} cap of ${formatINR(limit)} will be removed for ${monthLabel(viewedMonthKey)}.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteBudget(cat, limit)
+                    budgetToDelete = null
+                }) { Text("Remove", color = Rust) }
+            },
+            dismissButton = { TextButton(onClick = { budgetToDelete = null }) { Text("Cancel") } }
+        )
     }
 }
 

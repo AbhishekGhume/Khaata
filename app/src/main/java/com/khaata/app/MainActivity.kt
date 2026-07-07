@@ -47,6 +47,9 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -273,6 +276,19 @@ fun KhaataApp(
     }
     var activeTutorialScreenId by remember { mutableStateOf<String?>(null) }
     var showMonthYearPicker by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Surface write failures and "deleted — Undo" prompts from the ViewModel.
+    LaunchedEffect(Unit) {
+        viewModel.messages.collect { message ->
+            val result = snackbarHostState.showSnackbar(
+                message = message.text,
+                actionLabel = message.actionLabel,
+                withDismissAction = message.actionLabel == null
+            )
+            if (result == SnackbarResult.ActionPerformed) message.onAction?.invoke()
+        }
+    }
 
     LaunchedEffect(activeTab, showSettings) {
         if (!showSettings) {
@@ -293,6 +309,7 @@ fun KhaataApp(
 
     Scaffold(
         containerColor = Paper,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 TopAppBar(

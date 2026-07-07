@@ -292,23 +292,60 @@ class FinanceRepository(private val uid: String) {
     suspend fun addExpense(monthKey: String, expense: Expense) {
         val monthRef = monthsRef().document(monthKey)
         val expenseRef = monthRef.collection("expenses").document()
-        expenseRef.set(
-            mapOf(
-                "category" to expense.category,
-                "amount" to expense.amount,
-                "note" to expense.note,
-                "date" to expense.date
+        // One batch so the expense doc and the running `totalExpenses` can never
+        // disagree: either both land or neither does. A crash/network drop
+        // between two separate writes used to leave the total permanently off.
+        db.batch().apply {
+            set(
+                expenseRef,
+                mapOf(
+                    "category" to expense.category,
+                    "amount" to expense.amount,
+                    "note" to expense.note,
+                    "date" to expense.date
+                )
             )
-        ).await()
-        // set + merge with FieldValue.increment creates the month doc if it
-        // doesn't exist yet, or atomically bumps the running total if it does.
-        monthRef.set(mapOf("totalExpenses" to FieldValue.increment(expense.amount)), SetOptions.merge()).await()
+            // merge creates the month doc if absent, or atomically bumps the total.
+            set(monthRef, mapOf("totalExpenses" to FieldValue.increment(expense.amount)), SetOptions.merge())
+        }.commit().await()
     }
 
     suspend fun deleteExpense(monthKey: String, expenseId: String, amount: Double) {
         val monthRef = monthsRef().document(monthKey)
-        monthRef.collection("expenses").document(expenseId).delete().await()
-        monthRef.set(mapOf("totalExpenses" to FieldValue.increment(-amount)), SetOptions.merge()).await()
+        db.batch().apply {
+            delete(monthRef.collection("expenses").document(expenseId))
+            set(monthRef, mapOf("totalExpenses" to FieldValue.increment(-amount)), SetOptions.merge())
+        }.commit().await()
+    }
+
+    /**
+     * Edits an existing expense atomically, adjusting the affected month total(s).
+     * If the new date lands in a different month, the entry is moved: removed from
+     * the old month (and its total) and re-created in the new month — all in one
+     * batch so nothing is ever double-counted or lost midway.
+     */
+    suspend fun updateExpense(oldMonthKey: String, expenseId: String, oldAmount: Double, updated: Expense) {
+        val newMonthKey = com.khaata.app.data.model.monthKeyFromDate(updated.date)
+        val fields = mapOf(
+            "category" to updated.category,
+            "amount" to updated.amount,
+            "note" to updated.note,
+            "date" to updated.date
+        )
+        val batch = db.batch()
+        if (newMonthKey == oldMonthKey) {
+            val monthRef = monthsRef().document(oldMonthKey)
+            batch.set(monthRef.collection("expenses").document(expenseId), fields)
+            batch.set(monthRef, mapOf("totalExpenses" to FieldValue.increment(updated.amount - oldAmount)), SetOptions.merge())
+        } else {
+            val oldMonthRef = monthsRef().document(oldMonthKey)
+            val newMonthRef = monthsRef().document(newMonthKey)
+            batch.delete(oldMonthRef.collection("expenses").document(expenseId))
+            batch.set(oldMonthRef, mapOf("totalExpenses" to FieldValue.increment(-oldAmount)), SetOptions.merge())
+            batch.set(newMonthRef.collection("expenses").document(), fields)
+            batch.set(newMonthRef, mapOf("totalExpenses" to FieldValue.increment(updated.amount)), SetOptions.merge())
+        }
+        batch.commit().await()
     }
 
     suspend fun addGoal(goal: Goal) {
@@ -365,12 +402,82 @@ class FinanceRepository(private val uid: String) {
 
     suspend fun logContribution(goalId: String, monthKey: String, amount: Double, date: String) {
         val goalRef = goalsRef().document(goalId)
-        goalRef.collection("contributions").document().set(mapOf("amount" to amount, "date" to date)).await()
+        db.batch().apply {
+            set(goalRef.collection("contributions").document(), mapOf("amount" to amount, "date" to date))
+            update(
+                goalRef,
+                mapOf(
+                    "savedAmount" to FieldValue.increment(amount),
+                    "monthlyContributions.$monthKey" to FieldValue.increment(amount)
+                )
+            )
+        }.commit().await()
+    }
+
+    /**
+     * Edits (or, when [newAmount] is 0, removes) the total saved for one month of a
+     * goal. GoalsScreen shows contributions rolled up per month, so an edit operates
+     * on that month's aggregate: `savedAmount` moves by the delta and the month's map
+     * entry is set to the exact new value (or deleted). Atomic via a batch.
+     */
+    suspend fun editMonthlyContribution(goalId: String, monthKey: String, oldAmount: Double, newAmount: Double) {
+        val goalRef = goalsRef().document(goalId)
+        val monthValue: Any = if (newAmount <= 0.0) FieldValue.delete() else newAmount
         goalRef.update(
             mapOf(
-                "savedAmount" to FieldValue.increment(amount),
-                "monthlyContributions.$monthKey" to FieldValue.increment(amount)
+                "savedAmount" to FieldValue.increment(newAmount - oldAmount),
+                "monthlyContributions.$monthKey" to monthValue
             )
         ).await()
+    }
+
+    /** All contribution docs for a goal — captured before a delete so it can be undone. */
+    suspend fun getAllContributions(goalId: String): List<Contribution> {
+        val snapshot = goalsRef().document(goalId).collection("contributions").get().await()
+        return snapshot.documents.map { d ->
+            Contribution(id = d.id, amount = d.getDouble("amount") ?: 0.0, date = d.getString("date") ?: "")
+        }
+    }
+
+    /**
+     * Re-creates a previously deleted goal (undo). Restores the goal doc with its
+     * saved total and per-month map intact, and re-adds each captured contribution
+     * doc under its original id. Chunked into batches to respect the 500-op cap.
+     */
+    suspend fun restoreGoal(goal: Goal, contributions: List<Contribution>) {
+        val goalRef = goalsRef().document(goal.id)
+        contributions.chunked(450).forEachIndexed { index, chunk ->
+            val batch = db.batch()
+            if (index == 0) {
+                batch.set(
+                    goalRef,
+                    mapOf(
+                        "name" to goal.name,
+                        "targetAmount" to goal.targetAmount,
+                        "targetDate" to goal.targetDate,
+                        "createdAt" to goal.createdAt,
+                        "savedAmount" to goal.savedAmount,
+                        "monthlyContributions" to goal.monthlyContributions
+                    )
+                )
+            }
+            chunk.forEach { c ->
+                batch.set(goalRef.collection("contributions").document(c.id), mapOf("amount" to c.amount, "date" to c.date))
+            }
+            batch.commit().await()
+        }
+        // A goal with no contributions still needs its doc written.
+        if (contributions.isEmpty()) {
+            goalRef.set(
+                mapOf(
+                    "name" to goal.name,
+                    "targetAmount" to goal.targetAmount,
+                    "targetDate" to goal.targetDate,
+                    "createdAt" to goal.createdAt,
+                    "savedAmount" to goal.savedAmount,
+                    "monthlyContributions" to goal.monthlyContributions
+                )
+            ).await()
+        }
     }
 }
