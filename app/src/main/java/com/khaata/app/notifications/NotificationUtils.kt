@@ -7,8 +7,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.khaata.app.R
 import com.khaata.app.MainActivity
 import androidx.annotation.RequiresPermission
@@ -19,6 +22,21 @@ const val BUDGET_WARNING_NOTIFICATION_ID = 1001
 const val INACTIVITY_NOTIFICATION_ID = 1002
 const val TEST_NOTIFICATION_ID = 1099
 const val EXTRA_OPEN_ADD_ENTRY = "com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY"
+
+/**
+ * True when we're allowed to post notifications. Below Android 13 the runtime
+ * permission doesn't exist and notifications are always allowed; from Tiramisu on
+ * it must be granted or `notify()` silently no-ops. Callers of the
+ * `@RequiresPermission(POST_NOTIFICATIONS)` helpers must gate on this so denied
+ * reminders are skipped explicitly rather than vanishing without a trace.
+ */
+fun hasNotificationPermission(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.POST_NOTIFICATIONS
+    ) == PackageManager.PERMISSION_GRANTED
+}
 
 fun ensureNotificationChannel(context: Context) {
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

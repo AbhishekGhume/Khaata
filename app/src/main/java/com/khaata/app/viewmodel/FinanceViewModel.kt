@@ -6,10 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.khaata.app.data.model.AnalyticsSnapshot
 import com.khaata.app.data.model.Budget
 import com.khaata.app.data.model.BudgetProgress
+import androidx.compose.ui.graphics.Color
 import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
+import com.khaata.app.data.model.RecurringExpense
+import com.khaata.app.util.CategoryMeta
+import com.khaata.app.util.DEFAULT_CATEGORIES
 import com.khaata.app.data.model.buildBudgetProgress
 import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
@@ -75,6 +79,27 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
 
     val goals: StateFlow<List<Goal>> = repository.observeGoals()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val categories: StateFlow<List<CategoryMeta>> = repository.observeCategories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DEFAULT_CATEGORIES)
+
+    val recurring: StateFlow<List<RecurringExpense>> = repository.observeRecurring()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // All-time expenses for the Search screen — refreshed on demand (not a live listener).
+    private val _allExpenses = MutableStateFlow<List<Expense>>(emptyList())
+    val allExpenses: StateFlow<List<Expense>> = _allExpenses
+    private val _allExpensesLoading = MutableStateFlow(false)
+    val allExpensesLoading: StateFlow<Boolean> = _allExpensesLoading
+
+    init {
+        // Seed built-in categories once, then auto-post any recurring templates due
+        // for the actual current calendar month. Both are idempotent.
+        viewModelScope.launch {
+            runCatching { repository.ensureCategoriesSeeded() }
+            runCatching { repository.postDueRecurring(currentMonthKey()) }
+        }
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val budgets: StateFlow<List<Budget>> = _viewedMonthKey
@@ -306,6 +331,68 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     private fun requiredMonthlyGoalSavings(goalList: List<Goal>): Double {
         val monthKey = currentMonthKey()
         return goalList.sumOf { it.computeStats(monthKey).requiredMonthly }
+    }
+
+    // ── Categories ──────────────────────────────────────────────────────────
+
+    fun saveCategory(key: String, label: String, color: Color, iconKey: String) = viewModelScope.launch {
+        // New categories append to the end of the current ordering.
+        val order = categories.value.indexOfFirst { it.key == key }.let { if (it >= 0) it else categories.value.size }
+        runCatching { repository.upsertCategory(key, label.trim(), color, iconKey, order) }
+            .onFailure { postMessage("Couldn't save the category.") }
+    }
+
+    fun deleteCategory(key: String) = viewModelScope.launch {
+        if (key == "other") {
+            postMessage("\"Other\" is the fallback category and can't be deleted.")
+            return@launch
+        }
+        runCatching { repository.deleteCategory(key) }
+            .onSuccess { postMessage("Category deleted. Past entries and any recurring expenses using it now fall under \"Other\".") }
+            .onFailure { postMessage("Couldn't delete the category.") }
+    }
+
+    // ── Recurring expenses ──────────────────────────────────────────────────
+
+    fun addRecurring(category: String, amount: Double, note: String, dayOfMonth: Int) = viewModelScope.launch {
+        runCatching {
+            repository.addRecurring(
+                RecurringExpense(
+                    category = category, amount = amount, note = note.trim(),
+                    dayOfMonth = dayOfMonth, active = true, createdAt = todayStr()
+                )
+            )
+        }.onFailure { postMessage("Couldn't save the recurring expense.") }
+    }
+
+    fun updateRecurring(id: String, category: String, amount: Double, note: String, dayOfMonth: Int) = viewModelScope.launch {
+        runCatching { repository.updateRecurring(id, category, amount, note.trim(), dayOfMonth) }
+            .onFailure { postMessage("Couldn't update the recurring expense.") }
+    }
+
+    fun setRecurringActive(id: String, active: Boolean) = viewModelScope.launch {
+        runCatching { repository.setRecurringActive(id, active) }
+            .onFailure { postMessage("Couldn't change the recurring expense.") }
+    }
+
+    fun deleteRecurring(recurring: RecurringExpense) = viewModelScope.launch {
+        runCatching { repository.deleteRecurring(recurring.id) }
+            .onSuccess {
+                postMessage("Recurring expense removed.", actionLabel = "Undo") {
+                    addRecurring(recurring.category, recurring.amount, recurring.note, recurring.dayOfMonth)
+                }
+            }
+            .onFailure { postMessage("Couldn't remove the recurring expense.") }
+    }
+
+    // ── All-time search ─────────────────────────────────────────────────────
+
+    fun refreshAllExpenses() = viewModelScope.launch {
+        _allExpensesLoading.value = true
+        runCatching { repository.loadAllExpenses() }
+            .onSuccess { _allExpenses.value = it }
+            .onFailure { postMessage("Couldn't load expenses for search.") }
+        _allExpensesLoading.value = false
     }
 }
 

@@ -45,7 +45,7 @@ import com.khaata.app.ui.theme.PaperCard
 import com.khaata.app.ui.theme.PaperLine
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.ui.theme.RustSoft
-import com.khaata.app.util.CATEGORIES
+import com.khaata.app.util.categoryMeta
 import com.khaata.app.util.formatINR
 import com.khaata.app.viewmodel.FinanceViewModel
 
@@ -57,14 +57,17 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
     val goals by viewModel.goals.collectAsState()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
+    val categories by viewModel.categories.collectAsState()
     val isCurrentMonth = viewedMonthKey == currentMonthKey()
 
-    val categoryTotals = remember(expenses) {
+    val categoryTotals = remember(expenses, categories) {
         val totals = mutableMapOf<String, Double>()
         expenses.forEach { e -> totals[e.category] = (totals[e.category] ?: 0.0) + e.amount }
         val total = totals.values.sum().takeIf { it > 0 } ?: 1.0
-        CATEGORIES.filter { totals.containsKey(it.key) }
-            .map { Triple(it, totals[it.key]!!, (totals[it.key]!! / total * 100).toFloat()) }
+        // Any category key present in expenses, resolved against the live list
+        // (falls back to "Other" for keys whose category was deleted).
+        totals.keys
+            .map { key -> Triple(categoryMeta(key, categories), totals[key]!!, (totals[key]!! / total * 100).toFloat()) }
             .sortedByDescending { it.second }
     }
 

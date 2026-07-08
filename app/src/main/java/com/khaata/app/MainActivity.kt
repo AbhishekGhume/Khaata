@@ -33,7 +33,11 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -105,6 +109,10 @@ import com.khaata.app.ui.screens.DashboardScreen
 import com.khaata.app.ui.screens.GoalsScreen
 import com.khaata.app.ui.screens.HistoryScreen
 import com.khaata.app.ui.screens.BudgetsScreen
+import com.khaata.app.ui.screens.CategoryManagementScreen
+import com.khaata.app.ui.screens.ExportScreen
+import com.khaata.app.ui.screens.RecurringExpensesScreen
+import com.khaata.app.ui.screens.SearchScreen
 import com.khaata.app.ui.screens.SecurityGateScreen
 import com.khaata.app.ui.screens.NotificationSettingsScreen
 import com.khaata.app.ui.theme.Gold
@@ -128,8 +136,12 @@ enum class KhaataTab(val label: String, val icon: ImageVector) {
     BUDGETS("Budgets", Icons.AutoMirrored.Filled.ListAlt),
     ENTRY("Add Entry", Icons.Filled.Add),
     GOALS("Goals", Icons.Filled.Flag),
+    SEARCH("Search", Icons.Filled.Search),
     HISTORY("History", Icons.Filled.History),
 }
+
+/** Full-screen destinations reached from the "More" sheet, layered over the tab content. */
+enum class SubScreen { SETTINGS, RECURRING, CATEGORIES, EXPORT }
 
 class MainActivity : FragmentActivity() {
     private var openEntryTabRequested by mutableStateOf(false)
@@ -247,14 +259,14 @@ fun KhaataApp(
     onSignOut: () -> Unit,
 ) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
-    var showSettings by remember { mutableStateOf(false) }
+    var activeSubScreen by remember { mutableStateOf<SubScreen?>(null) }
     var showSignOutConfirm by remember { mutableStateOf(false) }
     var showMoreSheet by remember { mutableStateOf(false) }
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val isViewingCurrentMonth = viewedMonthKey == currentMonthKey()
     val canGoToNextMonth = viewedMonthKey < currentMonthKey()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
-    val showMonthNav = !showSettings && (activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY || activeTab == KhaataTab.BUDGETS || activeTab == KhaataTab.ANALYTICS)
+    val showMonthNav = activeSubScreen == null && (activeTab == KhaataTab.DASHBOARD || activeTab == KhaataTab.ENTRY || activeTab == KhaataTab.BUDGETS || activeTab == KhaataTab.ANALYTICS)
     val projectedRunoutCount = budgetProgress.count { it.projectedRunout }
     val overCount = budgetProgress.count { it.status == com.khaata.app.data.model.BudgetStatus.OVER }
     val stripColor = when {
@@ -271,7 +283,8 @@ fun KhaataApp(
             KhaataTab.ANALYTICS,
             KhaataTab.BUDGETS,
             KhaataTab.ENTRY,
-            KhaataTab.GOALS
+            KhaataTab.GOALS,
+            KhaataTab.SEARCH
         )
     }
     var activeTutorialScreenId by remember { mutableStateOf<String?>(null) }
@@ -290,8 +303,8 @@ fun KhaataApp(
         }
     }
 
-    LaunchedEffect(activeTab, showSettings) {
-        if (!showSettings) {
+    LaunchedEffect(activeTab, activeSubScreen) {
+        if (activeSubScreen == null) {
             val screenId = tutorialIdFor(activeTab)
             if (screenId != null && !hasTutorialBeenSeen(context, screenId)) {
                 activeTutorialScreenId = screenId
@@ -301,7 +314,7 @@ fun KhaataApp(
 
     LaunchedEffect(openEntryTabRequested) {
         if (openEntryTabRequested) {
-            showSettings = false
+            activeSubScreen = null
             activeTab = KhaataTab.ENTRY
             onOpenEntryTabHandled()
         }
@@ -325,7 +338,7 @@ fun KhaataApp(
                     actions = {
                         IconButton(onClick = {
                             val screenId = tutorialIdFor(activeTab)
-                            if (!showSettings && screenId != null) activeTutorialScreenId = screenId
+                            if (activeSubScreen == null && screenId != null) activeTutorialScreenId = screenId
                         }) {
                             Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Show help for this screen", tint = Paper)
                         }
@@ -457,11 +470,14 @@ fun KhaataApp(
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            if (showSettings) {
-                NotificationSettingsScreen(
-                    viewModel = viewModel,
-                    onBack = { showSettings = false }
-                )
+            if (activeSubScreen != null) {
+                when (activeSubScreen) {
+                    SubScreen.SETTINGS -> NotificationSettingsScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
+                    SubScreen.RECURRING -> RecurringExpensesScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
+                    SubScreen.CATEGORIES -> CategoryManagementScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
+                    SubScreen.EXPORT -> ExportScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
+                    null -> Unit
+                }
             } else {
                 when (activeTab) {
                     KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
@@ -469,6 +485,7 @@ fun KhaataApp(
                     KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
                     KhaataTab.ENTRY -> AddEntryScreen(viewModel)
                     KhaataTab.GOALS -> GoalsScreen(viewModel)
+                    KhaataTab.SEARCH -> SearchScreen(viewModel)
                     KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
                         viewModel.jumpToMonth(key)
                         activeTab = KhaataTab.DASHBOARD
@@ -529,8 +546,56 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    showSettings = false
+                                    activeSubScreen = null
                                     activeTab = KhaataTab.HISTORY
+                                }
+                            }
+                    )
+                    ListItem(
+                        headlineContent = { Text("Recurring expenses") },
+                        supportingContent = { Text("Rent, subscriptions & other fixed costs") },
+                        leadingContent = {
+                            Icon(Icons.Filled.Repeat, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    activeSubScreen = SubScreen.RECURRING
+                                }
+                            }
+                    )
+                    ListItem(
+                        headlineContent = { Text("Manage categories") },
+                        supportingContent = { Text("Add, rename, recolor & re-icon") },
+                        leadingContent = {
+                            Icon(Icons.Filled.Category, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    activeSubScreen = SubScreen.CATEGORIES
+                                }
+                            }
+                    )
+                    ListItem(
+                        headlineContent = { Text("Export data") },
+                        supportingContent = { Text("Download your ledger as CSV or PDF") },
+                        leadingContent = {
+                            Icon(Icons.Filled.FileDownload, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    activeSubScreen = SubScreen.EXPORT
                                 }
                             }
                     )
@@ -553,7 +618,7 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    showSettings = true
+                                    activeSubScreen = SubScreen.SETTINGS
                                 }
                             }
                     )
@@ -757,5 +822,6 @@ private fun tutorialIdFor(tab: KhaataTab): String? = when (tab) {
     KhaataTab.BUDGETS   -> TutorialContent.BUDGETS
     KhaataTab.ENTRY     -> TutorialContent.ADD_ENTRY
     KhaataTab.GOALS     -> TutorialContent.GOALS
+    KhaataTab.SEARCH    -> null
     KhaataTab.HISTORY   -> TutorialContent.HISTORY
 }

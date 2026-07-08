@@ -73,6 +73,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val budgetProgress by viewModel.budgetProgress.collectAsState()
     val budgets by viewModel.budgets.collectAsState()
+    val categories by viewModel.categories.collectAsState()
     val isCurrentMonth = viewedMonthKey == currentMonthKey()
 
     var category by remember { mutableStateOf(CATEGORIES.first().key) }
@@ -112,7 +113,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                         )
                     }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CATEGORIES.forEach { meta ->
+                        categories.forEach { meta ->
                             Button(
                                 enabled = isCurrentMonth,
                                 onClick = { category = meta.key },
@@ -193,6 +194,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
             items(budgetProgress, key = { it.category }) { progress ->
                 BudgetProgressCard(
                     progress = progress,
+                    categories = categories,
                     canDelete = isCurrentMonth,
                     onDelete = { budgetToDelete = progress.category to progress.limitAmount }
                 )
@@ -202,7 +204,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
         if (budgets.isNotEmpty()) {
             item { Text("Saved budgets", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
             items(budgets, key = { it.id }) { budget ->
-                val meta = categoryMeta(budget.category)
+                val meta = categoryMeta(budget.category, categories)
                 Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -228,7 +230,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
         AlertDialog(
             onDismissRequest = { budgetToDelete = null },
             title = { Text("Remove this budget?") },
-            text = { Text("${categoryMeta(cat).label} cap of ${formatINR(limit)} will be removed for ${monthLabel(viewedMonthKey)}.") },
+            text = { Text("${categoryMeta(cat, categories).label} cap of ${formatINR(limit)} will be removed for ${monthLabel(viewedMonthKey)}.") },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteBudget(cat, limit)
@@ -241,8 +243,8 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
 }
 
 @Composable
-private fun BudgetProgressCard(progress: BudgetProgress, canDelete: Boolean, onDelete: () -> Unit) {
-    val meta = categoryMeta(progress.category)
+private fun BudgetProgressCard(progress: BudgetProgress, categories: List<com.khaata.app.util.CategoryMeta>, canDelete: Boolean, onDelete: () -> Unit) {
+    val meta = categoryMeta(progress.category, categories)
     val (bg, fg, label) = when (progress.status) {
         BudgetStatus.ON_TRACK -> Triple(GreenSoft, Green, "On track")
         BudgetStatus.WATCHING -> Triple(Gold, Ink, "Watch closely")

@@ -1,6 +1,9 @@
 package com.khaata.app.notifications
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.google.firebase.auth.FirebaseAuth
@@ -21,6 +24,24 @@ class ReminderWorker(
         val auth = FirebaseAuth.getInstance()
         val uid = auth.currentUser?.uid ?: return Result.success()
         val repository = FinanceRepository(uid)
+
+        // The worker runs every 24h in the background, so it's also our safety net
+        // for materializing recurring expenses: if the app isn't opened for a month
+        // (or several), this back-fills the missed occurrences that the on-open pass
+        // in FinanceViewModel would otherwise never revisit. Idempotent, so running
+        // it here as well as on app-open never double-posts.
+        runCatching { repository.postDueRecurring(currentMonthKey()) }
+
+        // From Android 13 on, notify() silently no-ops without POST_NOTIFICATIONS.
+        // Bail out explicitly rather than doing all the reads only to drop the
+        // notifications on the floor. (Inline check so Lint's MissingPermission
+        // detector sees the guard.)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return Result.success()
+        }
+
         val monthKey = repository.loadLatestMonthKey() ?: currentMonthKey()
         val settings = loadReminderSettings(applicationContext)
 

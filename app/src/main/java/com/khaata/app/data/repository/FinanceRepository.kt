@@ -16,9 +16,15 @@ import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.GoalStats
 import com.khaata.app.data.model.MonthSummary
 import com.khaata.app.data.model.MonthlyAnalyticsPoint
+import com.khaata.app.data.model.RecurringExpense
 import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import com.khaata.app.util.CategoryMeta
+import com.khaata.app.util.DEFAULT_CATEGORIES
 import java.time.LocalDate
+import java.time.YearMonth
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -43,6 +49,8 @@ class FinanceRepository(private val uid: String) {
     private fun monthsRef() = userRoot.collection("months")
     private fun budgetsRef() = userRoot.collection("budgets")
     private fun goalsRef() = userRoot.collection("goals")
+    private fun categoriesRef() = userRoot.collection("categories")
+    private fun recurringRef() = userRoot.collection("recurring")
 
     fun observeMonthSummary(monthKey: String): Flow<MonthSummary> = callbackFlow {
         val reg = monthsRef().document(monthKey).addSnapshotListener { snap, err ->
@@ -479,5 +487,263 @@ class FinanceRepository(private val uid: String) {
                 )
             ).await()
         }
+    }
+
+    // ── Categories ──────────────────────────────────────────────────────────
+    // Stored as users/{uid}/categories/{key}. Built-ins are seeded once and are
+    // fully editable thereafter. A deleted category needs no data migration: an
+    // unknown key falls back to "Other" wherever categoryMeta() is used.
+
+    fun observeCategories(): Flow<List<CategoryMeta>> = callbackFlow {
+        val reg = categoriesRef().orderBy("order").addSnapshotListener { snap, err ->
+            if (err != null) return@addSnapshotListener
+            val list = snap?.documents?.mapNotNull { d ->
+                val label = d.getString("label") ?: return@mapNotNull null
+                CategoryMeta(
+                    key = d.id,
+                    label = label,
+                    color = Color((d.getLong("colorArgb") ?: 0xFF6B6357L).toInt()),
+                    iconKey = d.getString("iconKey") ?: "category"
+                )
+            }.orEmpty()
+            // Until the first seed lands, fall back to the built-in defaults so
+            // pickers are never empty.
+            trySend(list.ifEmpty { DEFAULT_CATEGORIES })
+        }
+        awaitClose { reg.remove() }
+    }
+
+    /** Writes the built-in defaults the first time, if the collection is empty. */
+    suspend fun ensureCategoriesSeeded() {
+        if (!categoriesRef().limit(1).get().await().isEmpty) return
+        val batch = db.batch()
+        DEFAULT_CATEGORIES.forEachIndexed { index, meta ->
+            batch.set(
+                categoriesRef().document(meta.key),
+                mapOf(
+                    "label" to meta.label,
+                    "colorArgb" to meta.color.toArgb().toLong(),
+                    "iconKey" to meta.iconKey,
+                    "order" to index
+                )
+            )
+        }
+        batch.commit().await()
+    }
+
+    suspend fun upsertCategory(key: String, label: String, color: Color, iconKey: String, order: Int) {
+        categoriesRef().document(key).set(
+            mapOf(
+                "label" to label,
+                "colorArgb" to color.toArgb().toLong(),
+                "iconKey" to iconKey,
+                "order" to order
+            )
+        ).await()
+    }
+
+    /**
+     * Deletes a category and cleans up everything keyed to it, so nothing dangles
+     * under a category that no longer exists:
+     *
+     *  - **Budget docs** (`{yyyy-MM}_{key}`) are deleted outright. A budget for a
+     *    gone category is pure noise — it would otherwise keep showing in budget
+     *    progress mislabelled "Other", and budgets are cheap to re-create.
+     *  - **Recurring templates** are *reassigned* to "other" rather than deleted.
+     *    A template is a standing instruction (rent, a subscription); silently
+     *    dropping it would stop real expenses from posting. Reassigning mirrors how
+     *    past expenses fall back to "Other" at display time, and keeps them posting
+     *    under a category that actually exists.
+     *
+     * Past expense docs are intentionally left as-is — they already fall back to
+     * "Other" via categoryMeta() and rewriting historical ledger rows would be both
+     * unnecessary and unbounded in cost.
+     */
+    suspend fun deleteCategory(key: String) {
+        val orphanBudgets = budgetsRef().whereEqualTo("category", key).get().await().documents
+        val staleRecurring = recurringRef().whereEqualTo("category", key).get().await().documents
+
+        val batch = db.batch()
+        batch.delete(categoriesRef().document(key))
+        orphanBudgets.forEach { batch.delete(it.reference) }
+        staleRecurring.forEach { batch.update(it.reference, "category", "other") }
+        batch.commit().await()
+    }
+
+    // ── Recurring expenses ──────────────────────────────────────────────────
+
+    fun observeRecurring(): Flow<List<RecurringExpense>> = callbackFlow {
+        val reg = recurringRef().orderBy("createdAt").addSnapshotListener { snap, err ->
+            if (err != null) return@addSnapshotListener
+            val list = snap?.documents?.map { d ->
+                RecurringExpense(
+                    id = d.id,
+                    category = d.getString("category") ?: "other",
+                    amount = d.getDouble("amount") ?: 0.0,
+                    note = d.getString("note") ?: "",
+                    dayOfMonth = (d.getLong("dayOfMonth") ?: 1L).toInt(),
+                    active = d.getBoolean("active") ?: true,
+                    createdAt = d.getString("createdAt") ?: "",
+                    lastPostedMonth = d.getString("lastPostedMonth") ?: ""
+                )
+            }.orEmpty()
+            trySend(list)
+        }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun addRecurring(recurring: RecurringExpense) {
+        recurringRef().document().set(
+            mapOf(
+                "category" to recurring.category,
+                "amount" to recurring.amount,
+                "note" to recurring.note,
+                "dayOfMonth" to recurring.dayOfMonth,
+                "active" to recurring.active,
+                "createdAt" to recurring.createdAt,
+                "lastPostedMonth" to recurring.lastPostedMonth
+            )
+        ).await()
+    }
+
+    suspend fun updateRecurring(id: String, category: String, amount: Double, note: String, dayOfMonth: Int) {
+        recurringRef().document(id).update(
+            mapOf(
+                "category" to category,
+                "amount" to amount,
+                "note" to note,
+                "dayOfMonth" to dayOfMonth
+            )
+        ).await()
+    }
+
+    suspend fun setRecurringActive(id: String, active: Boolean) {
+        recurringRef().document(id).update("active", active).await()
+    }
+
+    suspend fun deleteRecurring(id: String) {
+        recurringRef().document(id).delete().await()
+    }
+
+    /**
+     * Materializes every occurrence of every active template that is *due but not yet
+     * posted* into a real expense, up to and including [currentMonthKey].
+     *
+     * Two things this deliberately gets right:
+     *
+     *  - **Back-fill.** A template posts once per calendar month, but the app may not
+     *    be opened every month. So rather than only ever touching the current month,
+     *    this walks forward from the month after `lastPostedMonth` (or the template's
+     *    creation month on first run) up to now, posting each month it missed. Skip
+     *    July and open the app in August and July's rent still lands.
+     *
+     *  - **Correct date / no future posts.** An occurrence is posted only once its
+     *    `dayOfMonth` has actually arrived. Rent due on the 28th isn't logged three
+     *    weeks early just because you opened the app on the 1st — the current month is
+     *    left untouched until the 28th, then picked up on the next run.
+     *
+     * Idempotent AND race-safe: all of one template's due months are posted inside a
+     * single Firestore transaction that re-reads `lastPostedMonth` first. The two
+     * callers — the on-open pass in FinanceViewModel and the 24h ReminderWorker — can
+     * therefore run concurrently without double-posting: whichever transaction commits
+     * second finds its read of the template stale (the guard already advanced), retries,
+     * sees nothing due, and writes nothing. Advancing the guard and incrementing the
+     * month total live in the same atomic unit, so a total can never drift from its
+     * expenses.
+     */
+    suspend fun postDueRecurring(currentMonthKey: String) {
+        val today = LocalDate.now()
+        val currentMonth = runCatching { YearMonth.parse(currentMonthKey) }.getOrElse { YearMonth.now() }
+
+        val actives = recurringRef()
+            .whereEqualTo("active", true)
+            .get().await().documents
+
+        for (d in actives) {
+            val templateRef = recurringRef().document(d.id)
+            val amount = d.getDouble("amount") ?: 0.0
+            val category = d.getString("category") ?: "other"
+            val note = d.getString("note") ?: ""
+            val day = (d.getLong("dayOfMonth") ?: 1L).toInt()
+            val createdAt = d.getString("createdAt") ?: ""
+            val createdMonth = runCatching { YearMonth.parse(createdAt.substring(0, 7)) }.getOrNull()
+            val createdDate = runCatching { LocalDate.parse(createdAt) }.getOrNull()
+
+            // One transaction per template. Isolating each template means one
+            // template's failure can't abort another's, while the transaction's
+            // optimistic lock on the template doc still closes the double-post race.
+            runCatching {
+                db.runTransaction { txn ->
+                    val snap = txn.get(templateRef)
+                    // Re-check inside the txn: the template may have been switched
+                    // off between the query above and now.
+                    if (!(snap.getBoolean("active") ?: true)) return@runTransaction null
+                    val lastPosted = snap.getString("lastPostedMonth") ?: ""
+
+                    // Earliest month we might owe an expense for: the month after the
+                    // last one posted, or the creation month on the very first run so
+                    // we never back-post before the template existed.
+                    val startMonth = when {
+                        lastPosted.isNotEmpty() -> runCatching { YearMonth.parse(lastPosted).plusMonths(1) }.getOrNull()
+                        else -> createdMonth
+                    } ?: currentMonth
+
+                    var month = startMonth
+                    var lastWritten: String? = null
+                    while (!month.isAfter(currentMonth)) {
+                        val clampedDay = day.coerceIn(1, month.lengthOfMonth())
+                        val dueDate = month.atDay(clampedDay)
+
+                        // Day hasn't arrived yet (only possible for the current month —
+                        // every earlier month is fully past). Stop; a later run picks
+                        // it up on/after the due day, so nothing posts early.
+                        if (dueDate.isAfter(today)) break
+
+                        // Skip occurrences dated before the template was created.
+                        if (createdDate != null && dueDate.isBefore(createdDate)) {
+                            month = month.plusMonths(1)
+                            continue
+                        }
+
+                        val monthRef = monthsRef().document(month.toString())
+                        txn.set(
+                            monthRef.collection("expenses").document(),
+                            mapOf("category" to category, "amount" to amount, "note" to note, "date" to dueDate.toString())
+                        )
+                        txn.set(monthRef, mapOf("totalExpenses" to FieldValue.increment(amount)), SetOptions.merge())
+                        lastWritten = month.toString()
+                        month = month.plusMonths(1)
+                    }
+
+                    // Advance the guard only to the last month we actually posted, so a
+                    // not-yet-due current month is retried next run.
+                    if (lastWritten != null) txn.update(templateRef, "lastPostedMonth", lastWritten)
+                    lastWritten
+                }.await()
+            }
+        }
+    }
+
+    /**
+     * Every expense across every month, newest first. Reads each month's subcollection
+     * (bounded by month count) so it stays within the per-user security rules rather
+     * than needing a collectionGroup index. monthKey is recoverable from each date.
+     */
+    suspend fun loadAllExpenses(): List<Expense> {
+        val monthDocs = monthsRef().get().await().documents
+        val all = mutableListOf<Expense>()
+        for (m in monthDocs) {
+            val expenses = m.reference.collection("expenses").get().await().documents.map { d ->
+                Expense(
+                    id = d.id,
+                    category = d.getString("category") ?: "other",
+                    amount = d.getDouble("amount") ?: 0.0,
+                    note = d.getString("note") ?: "",
+                    date = d.getString("date") ?: ""
+                )
+            }
+            all += expenses
+        }
+        return all.sortedByDescending { it.date }
     }
 }

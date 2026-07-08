@@ -15,6 +15,21 @@ data class Expense(
     val date: String = "" // yyyy-MM-dd
 )
 
+/**
+ * A recurring expense template (rent, a subscription). Auto-posts one expense per
+ * month on [dayOfMonth]; [lastPostedMonth] ("2026-07") guards against double-posting.
+ */
+data class RecurringExpense(
+    val id: String = "",
+    val category: String = "other",
+    val amount: Double = 0.0,
+    val note: String = "",
+    val dayOfMonth: Int = 1,
+    val active: Boolean = true,
+    val createdAt: String = "",
+    val lastPostedMonth: String = ""
+)
+
 /** A monthly category budget, e.g. Food = ₹3,000 for 2026-06. */
 data class Budget(
     val id: String = "",
