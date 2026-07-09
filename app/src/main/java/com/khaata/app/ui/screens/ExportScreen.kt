@@ -21,6 +21,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -41,6 +43,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.khaata.app.data.model.monthKeyFromDate
+import com.khaata.app.data.model.monthLabel
+import com.khaata.app.data.model.todayStr
+import com.khaata.app.ui.components.DatePickerField
 import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.Muted
@@ -54,6 +60,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** The slice of the ledger the user wants to export. */
+private enum class ExportScope(val label: String) {
+    MONTH("This month"),
+    RANGE("Custom range"),
+    ALL("All data")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
@@ -63,15 +76,54 @@ fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
     val allMonths by viewModel.allMonths.collectAsState()
     val categories by viewModel.categories.collectAsState()
     val loading by viewModel.allExpensesLoading.collectAsState()
+    val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
 
     var working by remember { mutableStateOf(false) }
     var exportError by remember { mutableStateOf<String?>(null) }
+    var selectedScope by remember { mutableStateOf(ExportScope.MONTH) }
+    var rangeStart by remember { mutableStateOf("") }
+    var rangeEnd by remember { mutableStateOf(todayStr()) }
 
     // Pull a fresh all-time snapshot whenever this screen opens.
     LaunchedEffect(Unit) { viewModel.refreshAllExpenses() }
 
+    // A well-formed custom range is required before the RANGE scope can export.
+    val rangeValid = rangeStart.isNotBlank() && rangeEnd.isNotBlank() && rangeStart <= rangeEnd
+
+    // Filter the all-time snapshot down to the chosen scope. Dates are ISO
+    // yyyy-MM-dd strings, so lexicographic comparison is chronological.
+    val scopedExpenses = remember(allExpenses, selectedScope, viewedMonthKey, rangeStart, rangeEnd) {
+        when (selectedScope) {
+            ExportScope.MONTH -> allExpenses.filter { monthKeyFromDate(it.date) == viewedMonthKey }
+            ExportScope.RANGE -> if (rangeValid) allExpenses.filter { it.date in rangeStart..rangeEnd } else emptyList()
+            ExportScope.ALL -> allExpenses
+        }
+    }
+    val scopedMonths = remember(allMonths, scopedExpenses, selectedScope) {
+        when (selectedScope) {
+            ExportScope.ALL -> allMonths
+            else -> {
+                val keys = scopedExpenses.map { monthKeyFromDate(it.date) }.toSet()
+                allMonths.filter { it.monthKey in keys }
+            }
+        }
+    }
+
+    // Labels/filenames that describe the current scope for the PDF header and cache file.
+    val scopeLabel = when (selectedScope) {
+        ExportScope.MONTH -> monthLabel(viewedMonthKey)
+        ExportScope.RANGE -> if (rangeValid) "$rangeStart to $rangeEnd" else "Custom range"
+        ExportScope.ALL -> "All-time report"
+    }
+    val fileTag = when (selectedScope) {
+        ExportScope.MONTH -> viewedMonthKey
+        ExportScope.RANGE -> "${rangeStart}_to_${rangeEnd}"
+        ExportScope.ALL -> "all"
+    }
+
     val busy = loading || working
-    val hasData = allExpenses.isNotEmpty()
+    val rangeIncomplete = selectedScope == ExportScope.RANGE && !rangeValid
+    val hasData = scopedExpenses.isNotEmpty()
 
     Column(Modifier.fillMaxSize().background(Paper)) {
         TopAppBar(
@@ -86,10 +138,46 @@ fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
 
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                "Export your entire ledger — every expense across all months. Use CSV for spreadsheets " +
-                    "or a PDF report for a printable record. This doubles as your backup.",
+                "Choose how much of your ledger to export. Use CSV for spreadsheets or a PDF " +
+                    "report for a printable record. An all-data export doubles as your backup.",
                 color = Muted, fontSize = 13.sp
             )
+
+            // ── Scope selector ─────────────────────────────────────────────
+            Text("What to export", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExportScope.entries.forEach { option ->
+                    FilterChip(
+                        selected = selectedScope == option,
+                        onClick = { selectedScope = option; exportError = null },
+                        label = { Text(option.label) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Ink,
+                            selectedLabelColor = Paper
+                        )
+                    )
+                }
+            }
+
+            if (selectedScope == ExportScope.RANGE) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DatePickerField(
+                        label = "From",
+                        value = rangeStart,
+                        onValueChange = { rangeStart = it; exportError = null },
+                        modifier = Modifier.weight(1f)
+                    )
+                    DatePickerField(
+                        label = "To",
+                        value = rangeEnd,
+                        onValueChange = { rangeEnd = it; exportError = null },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (rangeStart.isNotBlank() && rangeEnd.isNotBlank() && rangeStart > rangeEnd) {
+                    Text("The start date must be on or before the end date.", color = Rust, fontSize = 12.sp)
+                }
+            }
 
             Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
                 Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -97,9 +185,13 @@ fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Green)
                         Spacer(Modifier.width(10.dp))
                         Text("Loading your ledger…", fontSize = 13.sp, color = Muted)
+                    } else if (rangeIncomplete) {
+                        Text("Pick a start and end date to export a custom range.", fontSize = 13.sp, color = Muted)
                     } else {
                         Text(
-                            "${allExpenses.size} entries across ${allMonths.size} month${if (allMonths.size == 1) "" else "s"} ready to export.",
+                            "${scopedExpenses.size} entr${if (scopedExpenses.size == 1) "y" else "ies"} " +
+                                "across ${scopedMonths.size} month${if (scopedMonths.size == 1) "" else "s"} " +
+                                "ready to export ($scopeLabel).",
                             fontSize = 13.sp, fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -113,8 +205,8 @@ fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
                     scope.launch {
                         try {
                             val uri = withContext(Dispatchers.IO) {
-                                val csv = Exporter.buildExpensesCsv(allExpenses, categories)
-                                Exporter.writeTextToCache(context, "khaata-expenses.csv", csv)
+                                val csv = Exporter.buildExpensesCsv(scopedExpenses, categories)
+                                Exporter.writeTextToCache(context, "khaata-expenses-$fileTag.csv", csv)
                             }
                             Exporter.shareFile(context, uri, "text/csv", "Khaata expenses (CSV)")
                         } catch (e: Exception) {
@@ -140,7 +232,11 @@ fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
                     scope.launch {
                         try {
                             val uri = withContext(Dispatchers.IO) {
-                                val file = Exporter.buildLedgerPdf(context, allMonths, allExpenses, categories)
+                                val file = Exporter.buildLedgerPdf(
+                                    context, scopedMonths, scopedExpenses, categories,
+                                    scopeLabel = scopeLabel,
+                                    fileName = "khaata-ledger-$fileTag.pdf"
+                                )
                                 Exporter.uriFor(context, file)
                             }
                             Exporter.shareFile(context, uri, "application/pdf", "Khaata ledger report (PDF)")
@@ -167,8 +263,8 @@ fun ExportScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
                     Text("Preparing your file…", fontSize = 12.sp, color = Muted)
                 }
             }
-            if (!loading && !hasData) {
-                Text("No expenses to export yet.", color = Rust, fontSize = 12.sp)
+            if (!loading && !rangeIncomplete && !hasData) {
+                Text("No expenses to export for this selection.", color = Rust, fontSize = 12.sp)
             }
             exportError?.let { Text(it, color = Rust, fontSize = 12.sp) }
             Spacer(Modifier.height(4.dp))

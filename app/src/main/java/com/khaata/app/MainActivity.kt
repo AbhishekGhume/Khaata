@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
@@ -283,8 +284,7 @@ fun KhaataApp(
             KhaataTab.ANALYTICS,
             KhaataTab.BUDGETS,
             KhaataTab.ENTRY,
-            KhaataTab.GOALS,
-            KhaataTab.SEARCH
+            KhaataTab.GOALS
         )
     }
     var activeTutorialScreenId by remember { mutableStateOf<String?>(null) }
@@ -336,6 +336,12 @@ fun KhaataApp(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
                     actions = {
+                        IconButton(onClick = {
+                            activeSubScreen = null
+                            activeTab = KhaataTab.SEARCH
+                        }) {
+                            Icon(Icons.Filled.Search, contentDescription = "Search all entries", tint = Paper)
+                        }
                         IconButton(onClick = {
                             val screenId = tutorialIdFor(activeTab)
                             if (activeSubScreen == null && screenId != null) activeTutorialScreenId = screenId
@@ -439,6 +445,17 @@ fun KhaataApp(
                         .height(3.dp)
                         .background(stripColor)
                 )
+            }
+        },
+        floatingActionButton = {
+            if (activeSubScreen == null && activeTab == KhaataTab.DASHBOARD) {
+                FloatingActionButton(
+                    onClick = { activeTab = KhaataTab.ENTRY },
+                    containerColor = Gold,
+                    contentColor = Ink
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add an entry")
+                }
             }
         },
         bottomBar = {

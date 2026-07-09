@@ -72,6 +72,8 @@ object Exporter {
         months: List<MonthSummary>,
         expenses: List<Expense>,
         categories: List<CategoryMeta>,
+        scopeLabel: String = "All-time report",
+        fileName: String = "khaata-ledger.pdf",
     ): File {
         val pageWidth = 595   // A4 @ 72dpi
         val pageHeight = 842
@@ -106,7 +108,7 @@ object Exporter {
         // ── Title ──
         canvas.drawText("Khaata — Ledger Export", margin, y, title)
         y += lineHeight + 6f
-        canvas.drawText("All-time report · ${expenses.size} entries", margin, y, muted)
+        canvas.drawText("$scopeLabel · ${expenses.size} entries", margin, y, muted)
         y += lineHeight + 8f
 
         // ── Monthly summary ──
@@ -168,7 +170,7 @@ object Exporter {
         }
 
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-        val file = File(dir, "khaata-ledger.pdf")
+        val file = File(dir, fileName)
         try {
             doc.finishPage(page)
             file.outputStream().use { doc.writeTo(it) }
