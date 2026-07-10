@@ -25,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -152,10 +153,22 @@ fun CategoryBarRow(label: String, color: Color, amount: String, pct: Float) {
     }
 }
 
-/** A read-only text field that opens a Material3 date picker dialog when tapped. */
+/**
+ * A read-only text field that opens a Material3 date picker dialog when tapped.
+ *
+ * [allowFuture] defaults to true (goal target dates, etc. legitimately live in the
+ * future). Pass false for things that can only have happened already — like an
+ * expense date — to gray out and block every day after today in the calendar.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DatePickerField(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
+fun DatePickerField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    allowFuture: Boolean = true,
+) {
     var showPicker by remember { mutableStateOf(false) }
 
     OutlinedTextField(
@@ -175,7 +188,25 @@ fun DatePickerField(label: String, value: String, onValueChange: (String) -> Uni
         val initialMillis = runCatching {
             LocalDate.parse(value).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         }.getOrNull()
-        val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+        // When future dates are disallowed, cap selection at the end of today (UTC,
+        // matching the picker's own UTC-based millis) so today itself stays pickable.
+        val selectableDates = remember(allowFuture) {
+            if (allowFuture) {
+                object : SelectableDates {}
+            } else {
+                val todayEndMillis = LocalDate.now(ZoneOffset.UTC)
+                    .plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() - 1
+                val todayYear = LocalDate.now(ZoneOffset.UTC).year
+                object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= todayEndMillis
+                    override fun isSelectableYear(year: Int) = year <= todayYear
+                }
+            }
+        }
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = initialMillis,
+            selectableDates = selectableDates
+        )
 
         DatePickerDialog(
             onDismissRequest = { showPicker = false },

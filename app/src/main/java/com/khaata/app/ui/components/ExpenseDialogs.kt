@@ -96,7 +96,7 @@ fun EditExpenseDialog(
         title = { Text("Edit entry") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                DatePickerField(label = "Date", value = date, onValueChange = { date = it }, modifier = Modifier.fillMaxWidth())
+                DatePickerField(label = "Date", value = date, onValueChange = { date = it }, modifier = Modifier.fillMaxWidth(), allowFuture = false)
                 CategoryDropdown(
                     category = category,
                     categories = categories,

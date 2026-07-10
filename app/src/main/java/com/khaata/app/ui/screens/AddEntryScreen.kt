@@ -160,7 +160,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
         item { Text("Log a kharcha entry", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                DatePickerField(label = "Date", value = date, onValueChange = { date = it }, modifier = Modifier.width(150.dp))
+                DatePickerField(label = "Date", value = date, onValueChange = { date = it }, modifier = Modifier.width(150.dp), allowFuture = false)
 
                 CategoryDropdown(
                     category = category,

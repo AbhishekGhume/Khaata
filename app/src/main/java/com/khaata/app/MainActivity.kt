@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -144,6 +145,9 @@ enum class KhaataTab(val label: String, val icon: ImageVector) {
 /** Full-screen destinations reached from the "More" sheet, layered over the tab content. */
 enum class SubScreen { SETTINGS, RECURRING, CATEGORIES, EXPORT }
 
+/** One entry in the in-app back stack: which tab was showing, and which sub-screen (if any) was layered over it. */
+private data class NavState(val tab: KhaataTab, val sub: SubScreen?)
+
 class MainActivity : FragmentActivity() {
     private var openEntryTabRequested by mutableStateOf(false)
 
@@ -261,6 +265,30 @@ fun KhaataApp(
 ) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
     var activeSubScreen by remember { mutableStateOf<SubScreen?>(null) }
+    // In-app back stack. Every navigation pushes the screen we're leaving so the
+    // system back button (and sub-screen "back" arrows) can retrace it, instead of
+    // falling through to the OS and dropping the user out to their home screen.
+    val backStack = remember { androidx.compose.runtime.mutableStateListOf<NavState>() }
+
+    // The single entry point for all in-app navigation: records where we were,
+    // then moves. `sub` defaults to null so switching tabs also clears any open
+    // sub-screen (Recurring/Categories/Export/Settings) — that's what makes the
+    // bottom nav work while a sub-screen is showing.
+    fun navigateTo(tab: KhaataTab = activeTab, sub: SubScreen? = null) {
+        if (tab == activeTab && sub == activeSubScreen) return
+        backStack.add(NavState(activeTab, activeSubScreen))
+        activeTab = tab
+        activeSubScreen = sub
+    }
+
+    // Pop one step. Returns false when there's nothing left to pop (caller lets
+    // the OS handle back, i.e. exit the app).
+    fun goBack(): Boolean {
+        val prev = backStack.removeLastOrNull() ?: return false
+        activeTab = prev.tab
+        activeSubScreen = prev.sub
+        return true
+    }
     var showSignOutConfirm by remember { mutableStateOf(false) }
     var showMoreSheet by remember { mutableStateOf(false) }
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
@@ -314,9 +342,21 @@ fun KhaataApp(
 
     LaunchedEffect(openEntryTabRequested) {
         if (openEntryTabRequested) {
-            activeSubScreen = null
-            activeTab = KhaataTab.ENTRY
+            navigateTo(KhaataTab.ENTRY)
             onOpenEntryTabHandled()
+        }
+    }
+
+    // Intercept the system back button. A visible tutorial overlay swallows back
+    // first (it has no dismiss button on the hardware key otherwise); after that
+    // we retrace the in-app back stack. When the stack is empty and no overlay is
+    // up, this handler is disabled so back reaches the OS and closes the app.
+    BackHandler(enabled = activeTutorialScreenId != null || backStack.isNotEmpty()) {
+        if (activeTutorialScreenId != null) {
+            activeTutorialScreenId?.let { markTutorialSeen(context, it) }
+            activeTutorialScreenId = null
+        } else {
+            goBack()
         }
     }
 
@@ -336,10 +376,7 @@ fun KhaataApp(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Ink, titleContentColor = Paper),
                     actions = {
-                        IconButton(onClick = {
-                            activeSubScreen = null
-                            activeTab = KhaataTab.SEARCH
-                        }) {
+                        IconButton(onClick = { navigateTo(KhaataTab.SEARCH) }) {
                             Icon(Icons.Filled.Search, contentDescription = "Search all entries", tint = Paper)
                         }
                         IconButton(onClick = {
@@ -450,7 +487,7 @@ fun KhaataApp(
         floatingActionButton = {
             if (activeSubScreen == null && activeTab == KhaataTab.DASHBOARD) {
                 FloatingActionButton(
-                    onClick = { activeTab = KhaataTab.ENTRY },
+                    onClick = { navigateTo(KhaataTab.ENTRY) },
                     containerColor = Gold,
                     contentColor = Ink
                 ) {
@@ -462,8 +499,8 @@ fun KhaataApp(
             NavigationBar(containerColor = Ink, contentColor = Paper) {
                 primaryTabs.forEach { tab ->
                     NavigationBarItem(
-                        selected = activeTab == tab,
-                        onClick = { activeTab = tab },
+                        selected = activeSubScreen == null && activeTab == tab,
+                        onClick = { navigateTo(tab) },
                         alwaysShowLabel = false,
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
                         label = {
@@ -489,10 +526,10 @@ fun KhaataApp(
         Box(Modifier.padding(padding).fillMaxSize()) {
             if (activeSubScreen != null) {
                 when (activeSubScreen) {
-                    SubScreen.SETTINGS -> NotificationSettingsScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
-                    SubScreen.RECURRING -> RecurringExpensesScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
-                    SubScreen.CATEGORIES -> CategoryManagementScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
-                    SubScreen.EXPORT -> ExportScreen(viewModel = viewModel, onBack = { activeSubScreen = null })
+                    SubScreen.SETTINGS -> NotificationSettingsScreen(viewModel = viewModel, onBack = { goBack() })
+                    SubScreen.RECURRING -> RecurringExpensesScreen(viewModel = viewModel, onBack = { goBack() })
+                    SubScreen.CATEGORIES -> CategoryManagementScreen(viewModel = viewModel, onBack = { goBack() })
+                    SubScreen.EXPORT -> ExportScreen(viewModel = viewModel, onBack = { goBack() })
                     null -> Unit
                 }
             } else {
@@ -505,7 +542,7 @@ fun KhaataApp(
                     KhaataTab.SEARCH -> SearchScreen(viewModel)
                     KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
                         viewModel.jumpToMonth(key)
-                        activeTab = KhaataTab.DASHBOARD
+                        navigateTo(KhaataTab.DASHBOARD)
                     }
                 }
             }
@@ -563,8 +600,7 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    activeSubScreen = null
-                                    activeTab = KhaataTab.HISTORY
+                                    navigateTo(KhaataTab.HISTORY)
                                 }
                             }
                     )
@@ -580,7 +616,7 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    activeSubScreen = SubScreen.RECURRING
+                                    navigateTo(sub = SubScreen.RECURRING)
                                 }
                             }
                     )
@@ -596,7 +632,7 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    activeSubScreen = SubScreen.CATEGORIES
+                                    navigateTo(sub = SubScreen.CATEGORIES)
                                 }
                             }
                     )
@@ -612,7 +648,7 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    activeSubScreen = SubScreen.EXPORT
+                                    navigateTo(sub = SubScreen.EXPORT)
                                 }
                             }
                     )
@@ -635,7 +671,7 @@ fun KhaataApp(
                             .run {
                                 clickable {
                                     showMoreSheet = false
-                                    activeSubScreen = SubScreen.SETTINGS
+                                    navigateTo(sub = SubScreen.SETTINGS)
                                 }
                             }
                     )
