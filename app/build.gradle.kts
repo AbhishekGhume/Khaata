@@ -60,6 +60,9 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // Home-screen widget (Compose-style, keeps us off XML UI layouts)
+    implementation("androidx.glance:glance-appwidget:1.1.0")
+
     // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.4.0"))
     implementation("com.google.firebase:firebase-auth")

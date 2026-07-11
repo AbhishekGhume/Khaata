@@ -45,6 +45,8 @@ import com.khaata.app.notifications.scheduleDailyReminder
 import com.khaata.app.notifications.cancelDailyReminder
 import com.khaata.app.notifications.showReminderNotification
 import com.khaata.app.onboarding.resetAllTutorials
+import com.khaata.app.security.isAppLockEnabled
+import com.khaata.app.security.setAppLockEnabled
 import com.khaata.app.ui.theme.GoldSoft
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Ink
@@ -81,8 +83,19 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
             }
-            Text("Notification settings", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text("Settings", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         }
+
+        Text("Privacy", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        var appLockEnabled by remember { mutableStateOf(isAppLockEnabled(context)) }
+        SettingCard(
+            title = "Require unlock to open Khaata",
+            subtitle = "Ask for your phone PIN, pattern, or biometrics each time you open the app. Applies from the next time you open Khaata.",
+            checked = appLockEnabled,
+            onCheckedChange = { appLockEnabled = it; setAppLockEnabled(context, it) }
+        )
+
+        Text("Notifications", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
         Text("Choose which local reminders you want Khaata to send.", color = Muted, fontSize = 13.sp)
 
         SettingCard(

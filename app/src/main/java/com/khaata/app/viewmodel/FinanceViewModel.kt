@@ -10,8 +10,11 @@ import androidx.compose.ui.graphics.Color
 import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
+import com.khaata.app.data.model.LedgerEntry
 import com.khaata.app.data.model.MonthSummary
+import com.khaata.app.data.model.Person
 import com.khaata.app.data.model.RecurringExpense
+import com.khaata.app.data.model.Template
 import com.khaata.app.util.CategoryMeta
 import com.khaata.app.util.DEFAULT_CATEGORIES
 import com.khaata.app.data.model.buildBudgetProgress
@@ -80,10 +83,16 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     val goals: StateFlow<List<Goal>> = repository.observeGoals()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val people: StateFlow<List<Person>> = repository.observePeople()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val categories: StateFlow<List<CategoryMeta>> = repository.observeCategories()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DEFAULT_CATEGORIES)
 
     val recurring: StateFlow<List<RecurringExpense>> = repository.observeRecurring()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val templates: StateFlow<List<Template>> = repository.observeTemplates()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // All-time expenses for the Search screen — refreshed on demand (not a live listener).
@@ -333,6 +342,65 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
         return goalList.sumOf { it.computeStats(monthKey).requiredMonthly }
     }
 
+    // ── Udhaar / people ledger ──────────────────────────────────────────────
+
+    /** Live ledger for one person — collected per-card in PeopleScreen. */
+    fun ledgerFor(personId: String): kotlinx.coroutines.flow.Flow<List<LedgerEntry>> =
+        repository.observeLedger(personId)
+
+    /** HARD check — a person needs a name. */
+    fun validatePersonName(name: String): String? {
+        if (name.isBlank()) return "Enter a name."
+        return null
+    }
+
+    fun addPerson(name: String, note: String) = viewModelScope.launch {
+        if (validatePersonName(name) != null) return@launch
+        runCatching { repository.addPerson(Person(name = name.trim(), note = note.trim(), createdAt = todayStr())) }
+            .onFailure { postMessage("Couldn't add the person — nothing was saved.") }
+    }
+
+    /**
+     * Records a ledger entry. [amount] is already signed by the caller:
+     * positive = you gave (they owe you more), negative = you got (you owe them).
+     */
+    fun recordLedgerEntry(personId: String, amount: Double, note: String, date: String) = viewModelScope.launch {
+        runCatching { repository.recordLedgerEntry(personId, amount, note.trim(), date) }
+            .onFailure { postMessage("Couldn't record the entry — nothing was saved.") }
+    }
+
+    /** Settles a person's balance to zero by posting an offsetting entry. */
+    fun settleUp(person: Person) = viewModelScope.launch {
+        if (kotlin.math.abs(person.balance) < 0.001) return@launch
+        runCatching { repository.recordLedgerEntry(person.id, -person.balance, "Settled up", todayStr()) }
+            .onFailure { postMessage("Couldn't settle up — nothing was saved.") }
+    }
+
+    fun deleteLedgerEntry(personId: String, entry: LedgerEntry) = viewModelScope.launch {
+        runCatching { repository.deleteLedgerEntry(personId, entry.id, entry.amount) }
+            .onSuccess {
+                postMessage("Entry deleted.", actionLabel = "Undo") {
+                    recordLedgerEntry(personId, entry.amount, entry.note, entry.date)
+                }
+            }
+            .onFailure { postMessage("Couldn't delete the entry.") }
+    }
+
+    fun deletePerson(person: Person) = viewModelScope.launch {
+        // Capture the ledger first so a delete can be fully undone.
+        val entries = runCatching { repository.getPersonLedger(person.id) }.getOrDefault(emptyList())
+        runCatching { repository.deletePerson(person.id) }
+            .onSuccess {
+                postMessage("\"${person.name}\" removed.", actionLabel = "Undo") {
+                    viewModelScope.launch {
+                        runCatching { repository.restorePerson(person, entries) }
+                            .onFailure { postMessage("Couldn't restore the person.") }
+                    }
+                }
+            }
+            .onFailure { postMessage("Couldn't remove the person.") }
+    }
+
     // ── Categories ──────────────────────────────────────────────────────────
 
     fun saveCategory(key: String, label: String, color: Color, iconKey: String) = viewModelScope.launch {
@@ -383,6 +451,33 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
                 }
             }
             .onFailure { postMessage("Couldn't remove the recurring expense.") }
+    }
+
+    // ── Quick-add templates ──────────────────────────────────────────────────
+
+    fun addTemplate(label: String, category: String, amount: Double, note: String) = viewModelScope.launch {
+        runCatching {
+            repository.addTemplate(
+                Template(
+                    label = label.trim(),
+                    category = category,
+                    amount = amount,
+                    note = note.trim(),
+                    createdAt = todayStr()
+                )
+            )
+        }.onSuccess { postMessage("Saved as a quick-add template.") }
+            .onFailure { postMessage("Couldn't save the template.") }
+    }
+
+    fun deleteTemplate(template: Template) = viewModelScope.launch {
+        runCatching { repository.deleteTemplate(template.id) }
+            .onSuccess {
+                postMessage("Template removed.", actionLabel = "Undo") {
+                    addTemplate(template.label, template.category, template.amount, template.note)
+                }
+            }
+            .onFailure { postMessage("Couldn't remove the template.") }
     }
 
     // ── All-time search ─────────────────────────────────────────────────────

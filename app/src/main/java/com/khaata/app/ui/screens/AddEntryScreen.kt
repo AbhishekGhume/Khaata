@@ -1,7 +1,9 @@
 package com.khaata.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DividerDefaults
@@ -32,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -49,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.monthLabel
+import com.khaata.app.data.model.Template
 import com.khaata.app.data.model.todayStr
 import com.khaata.app.ui.components.CategoryDropdown
 import com.khaata.app.ui.components.DatePickerField
@@ -67,9 +73,11 @@ import com.khaata.app.ui.theme.Rust
 import com.khaata.app.ui.theme.RustSoft
 import com.khaata.app.util.CategoryMeta
 import com.khaata.app.util.categoryMeta
+import com.khaata.app.util.evaluateExpression
 import com.khaata.app.util.formatINR
 import com.khaata.app.util.isMoneyInputAllowed
-import com.khaata.app.util.parsePositiveAmount
+import com.khaata.app.util.isMoneyOrExprInputAllowed
+import com.khaata.app.util.looksLikeExpression
 import com.khaata.app.viewmodel.FinanceViewModel
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -80,6 +88,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     val budgetProgress by viewModel.budgetProgress.collectAsState()
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val categories by viewModel.categories.collectAsState()
+    val templates by viewModel.templates.collectAsState()
 
     var incomeDraft by remember(monthSummary.income, viewedMonthKey) { mutableStateOf(if (monthSummary.income == 0.0) "" else monthSummary.income.toString()) }
     var incomeError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
@@ -94,6 +103,11 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     // Expense being edited (opens the edit dialog) and being deleted (confirm dialog).
     var expenseToEdit by remember { mutableStateOf<Expense?>(null) }
     var expenseToDelete by remember { mutableStateOf<Expense?>(null) }
+
+    // Quick-add template state: which one is pending delete, and the "save current
+    // form as a template" dialog.
+    var templateToDelete by remember { mutableStateOf<Template?>(null) }
+    var showSaveTemplate by remember { mutableStateOf(false) }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -158,6 +172,25 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
         }
 
         item { Text("Log a kharcha entry", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
+        if (templates.isNotEmpty()) {
+            item {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    templates.forEach { template ->
+                        TemplateChip(
+                            template = template,
+                            categories = categories,
+                            onTap = {
+                                category = template.category
+                                amount = amountToInput(template.amount)
+                                note = template.note
+                                amountError = null
+                            },
+                            onLongPress = { templateToDelete = template }
+                        )
+                    }
+                }
+            }
+        }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 DatePickerField(label = "Date", value = date, onValueChange = { date = it }, modifier = Modifier.width(150.dp), allowFuture = false)
@@ -173,12 +206,28 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
 
                 OutlinedTextField(
                     value = amount,
-                    onValueChange = { if (isMoneyInputAllowed(it)) { amount = it; amountError = null } },
+                    onValueChange = { if (isMoneyOrExprInputAllowed(it)) { amount = it; amountError = null } },
                     label = { Text("Amount") },
                     modifier = Modifier.width(140.dp), singleLine = true,
                     isError = amountError != null,
-                    supportingText = amountError?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    supportingText = when {
+                        amountError != null -> { { Text(amountError!!, color = Rust, fontSize = 11.sp) } }
+                        looksLikeExpression(amount) -> {
+                            {
+                                val preview = evaluateExpression(amount)
+                                Text(
+                                    if (preview != null) "= ${formatINR(preview)}" else "Check the expression",
+                                    color = if (preview != null) Green else Rust,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        else -> null
+                    },
+                    // Phone keypad instead of Decimal: it exposes + − ( ) * / by
+                    // default, so an amount like 340+55+12 can be typed without any
+                    // extra in-app buttons. evaluateExpression resolves it on submit.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
                 )
                 OutlinedTextField(
                     value = note, onValueChange = { note = it }, label = { Text("Note") },
@@ -186,7 +235,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                 )
                 Button(
                     onClick = {
-                        val amt = parsePositiveAmount(amount)
+                        val amt = evaluateExpression(amount)?.takeIf { it > 0.0 }
                         when {
                             amt == null -> amountError = "Enter an amount greater than 0."
                             date.isBlank() -> amountError = "Pick a date."
@@ -202,9 +251,19 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                     Spacer(Modifier.width(4.dp))
                     Text("Add entry")
                 }
+                TextButton(
+                    onClick = {
+                        val amt = evaluateExpression(amount)?.takeIf { it > 0.0 }
+                        if (amt == null) amountError = "Enter an amount first to save a template."
+                        else showSaveTemplate = true
+                    }
+                ) {
+                    Icon(Icons.Filled.StarBorder, contentDescription = null, modifier = Modifier.size(16.dp), tint = Gold)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Save as template", color = Ink, fontSize = 13.sp)
+                }
             }
         }
-
         item {
             Text(
                 "${monthLabel(viewedMonthKey)} · ${expenses.size} entries · ${formatINR(monthSummary.totalExpenses)} total",
@@ -246,4 +305,102 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
             }
         )
     }
+
+    templateToDelete?.let { deleting ->
+        AlertDialog(
+            onDismissRequest = { templateToDelete = null },
+            title = { Text("Remove this template?") },
+            text = { Text("\"${deleting.label}\" will be removed from your quick-add chips. Your logged entries are untouched.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteTemplate(deleting)
+                    templateToDelete = null
+                }) { Text("Remove", color = Rust) }
+            },
+            dismissButton = { TextButton(onClick = { templateToDelete = null }) { Text("Cancel") } }
+        )
+    }
+
+    if (showSaveTemplate) {
+        val defaultLabel = note.trim().ifBlank { categoryMeta(category, categories).label }
+        SaveTemplateDialog(
+            defaultLabel = defaultLabel,
+            onDismiss = { showSaveTemplate = false },
+            onSave = { label ->
+                val amt = evaluateExpression(amount)?.takeIf { it > 0.0 }
+                if (amt != null) viewModel.addTemplate(label, category, amt, note.trim())
+                showSaveTemplate = false
+            }
+        )
+    }
+}
+
+/** Formats a stored template amount back into the amount field's input string, dropping a trailing ".0". */
+private fun amountToInput(amount: Double): String =
+    if (amount == amount.toLong().toDouble()) amount.toLong().toString() else amount.toString()
+
+/**
+ * A quick-add template chip. Tap fills the entry form; long-press asks to remove it.
+ * Rendered as a small pill with the category dot so it reads like the ledger rows.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TemplateChip(
+    template: Template,
+    categories: List<CategoryMeta>,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    val meta = categoryMeta(template.category, categories)
+    Surface(
+        color = PaperCard,
+        border = BorderStroke(1.dp, PaperLine),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.combinedClickable(onClick = onTap, onLongClick = onLongPress)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(8.dp).background(meta.color, CircleShape))
+            Spacer(Modifier.width(8.dp))
+            Text(template.label.ifBlank { meta.label }, fontSize = 13.sp, color = Ink)
+            Spacer(Modifier.width(6.dp))
+            Text(formatINR(template.amount), fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+        }
+    }
+}
+
+/** Names a template before saving. Prefilled with the note or category label. */
+@Composable
+private fun SaveTemplateDialog(
+    defaultLabel: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var label by remember { mutableStateOf(defaultLabel) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save as template") },
+        text = {
+            Column {
+                Text("Give this quick-add a short name.", color = Muted, fontSize = 13.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = label.isNotBlank(),
+                onClick = { onSave(label.trim()) }
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }

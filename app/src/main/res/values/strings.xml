@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Khaata</string>
+    <string name="widget_add_entry_description">Quickly log a new expense in Khaata</string>
 </resources>

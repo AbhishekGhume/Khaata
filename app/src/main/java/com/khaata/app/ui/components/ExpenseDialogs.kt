@@ -39,13 +39,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.Expense
+import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.util.CategoryMeta
 import com.khaata.app.util.categoryMeta
+import com.khaata.app.util.evaluateExpression
 import com.khaata.app.util.formatINR
-import com.khaata.app.util.isMoneyInputAllowed
-import com.khaata.app.util.parsePositiveAmount
+import com.khaata.app.util.isMoneyOrExprInputAllowed
+import com.khaata.app.util.looksLikeExpression
 
 /** A category picker driven by the live category list. Shared by every entry form. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,12 +109,26 @@ fun EditExpenseDialog(
                 )
                 OutlinedTextField(
                     value = amount,
-                    onValueChange = { if (isMoneyInputAllowed(it)) { amount = it; error = null } },
+                    onValueChange = { if (isMoneyOrExprInputAllowed(it)) { amount = it; error = null } },
                     label = { Text("Amount") },
                     singleLine = true,
                     isError = error != null,
-                    supportingText = error?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    supportingText = when {
+                        error != null -> { { Text(error!!, color = Rust, fontSize = 11.sp) } }
+                        looksLikeExpression(amount) -> {
+                            {
+                                val preview = evaluateExpression(amount)
+                                Text(
+                                    if (preview != null) "= ${formatINR(preview)}" else "Check the expression",
+                                    color = if (preview != null) Green else Rust,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        else -> null
+                    },
+                    // Phone keypad exposes + − ( ) * / so expressions (340+55) are typable.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -123,7 +139,7 @@ fun EditExpenseDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val amt = parsePositiveAmount(amount)
+                val amt = evaluateExpression(amount)?.takeIf { it > 0.0 }
                 when {
                     amt == null -> error = "Enter an amount greater than 0."
                     date.isBlank() -> error = "Pick a date."

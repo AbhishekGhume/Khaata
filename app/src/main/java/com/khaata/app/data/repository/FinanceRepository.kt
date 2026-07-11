@@ -14,9 +14,12 @@ import com.khaata.app.data.model.Contribution
 import com.khaata.app.data.model.Expense
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.GoalStats
+import com.khaata.app.data.model.LedgerEntry
 import com.khaata.app.data.model.MonthSummary
+import com.khaata.app.data.model.Person
 import com.khaata.app.data.model.MonthlyAnalyticsPoint
 import com.khaata.app.data.model.RecurringExpense
+import com.khaata.app.data.model.Template
 import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
 import androidx.compose.ui.graphics.Color
@@ -41,6 +44,8 @@ import kotlinx.coroutines.tasks.await
  *   users/{uid}/goals/{id}                       -> { name, targetAmount, targetDate,
  *                                                      createdAt, savedAmount, monthlyContributions }
  *   users/{uid}/goals/{id}/contributions/{id}    -> { amount, date }
+ *   users/{uid}/contacts/{id}                    -> { name, note, balance, createdAt }
+ *   users/{uid}/contacts/{id}/ledger/{id}        -> { amount, note, date }  (amount signed)
  */
 class FinanceRepository(private val uid: String) {
 
@@ -51,6 +56,8 @@ class FinanceRepository(private val uid: String) {
     private fun goalsRef() = userRoot.collection("goals")
     private fun categoriesRef() = userRoot.collection("categories")
     private fun recurringRef() = userRoot.collection("recurring")
+    private fun templatesRef() = userRoot.collection("templates")
+    private fun contactsRef() = userRoot.collection("contacts")
 
     fun observeMonthSummary(monthKey: String): Flow<MonthSummary> = callbackFlow {
         val reg = monthsRef().document(monthKey).addSnapshotListener { snap, err ->
@@ -489,6 +496,129 @@ class FinanceRepository(private val uid: String) {
         }
     }
 
+    // ── Udhaar / people ledger ──────────────────────────────────────────────
+    // Stored as users/{uid}/contacts/{id} with a running `balance` kept on the doc
+    // (mirrors a goal's savedAmount) and per-transaction rows under
+    // users/{uid}/contacts/{id}/ledger/{id}. balance > 0 → they owe you.
+
+    fun observePeople(): Flow<List<Person>> = callbackFlow {
+        val reg = contactsRef().orderBy("createdAt").addSnapshotListener { snap, err ->
+            if (err != null) return@addSnapshotListener
+            val list = snap?.documents?.map { d ->
+                Person(
+                    id = d.id,
+                    name = d.getString("name") ?: "",
+                    note = d.getString("note") ?: "",
+                    balance = d.getDouble("balance") ?: 0.0,
+                    createdAt = d.getString("createdAt") ?: ""
+                )
+            } ?: emptyList()
+            trySend(list)
+        }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeLedger(personId: String): Flow<List<LedgerEntry>> = callbackFlow {
+        val reg = contactsRef().document(personId).collection("ledger")
+            .orderBy("date", Query.Direction.DESCENDING)
+            .addSnapshotListener { snap, err ->
+                if (err != null) return@addSnapshotListener
+                val list = snap?.documents?.map { d ->
+                    LedgerEntry(
+                        id = d.id,
+                        amount = d.getDouble("amount") ?: 0.0,
+                        note = d.getString("note") ?: "",
+                        date = d.getString("date") ?: ""
+                    )
+                } ?: emptyList()
+                trySend(list)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun addPerson(person: Person) {
+        contactsRef().document().set(
+            mapOf(
+                "name" to person.name,
+                "note" to person.note,
+                "balance" to 0.0,
+                "createdAt" to person.createdAt
+            )
+        ).await()
+    }
+
+    /**
+     * Records one ledger entry and atomically moves the person's running balance by
+     * the same signed [amount], in a single batch so the two can never disagree.
+     * A "settle up" is just this with amount = -currentBalance.
+     */
+    suspend fun recordLedgerEntry(personId: String, amount: Double, note: String, date: String) {
+        val personRef = contactsRef().document(personId)
+        db.batch().apply {
+            set(personRef.collection("ledger").document(), mapOf("amount" to amount, "note" to note, "date" to date))
+            update(personRef, mapOf("balance" to FieldValue.increment(amount)))
+        }.commit().await()
+    }
+
+    /** Deletes one ledger entry and reverses its effect on the balance. Atomic. */
+    suspend fun deleteLedgerEntry(personId: String, entryId: String, amount: Double) {
+        val personRef = contactsRef().document(personId)
+        db.batch().apply {
+            delete(personRef.collection("ledger").document(entryId))
+            update(personRef, mapOf("balance" to FieldValue.increment(-amount)))
+        }.commit().await()
+    }
+
+    suspend fun deletePerson(personId: String) {
+        val personRef = contactsRef().document(personId)
+        val entries = personRef.collection("ledger").get().await()
+        val refsToDelete = entries.documents.map { it.reference } + personRef
+        deleteInChunks(refsToDelete)
+    }
+
+    /** All ledger docs for a person — captured before a delete so it can be undone. */
+    suspend fun getPersonLedger(personId: String): List<LedgerEntry> {
+        val snapshot = contactsRef().document(personId).collection("ledger").get().await()
+        return snapshot.documents.map { d ->
+            LedgerEntry(
+                id = d.id,
+                amount = d.getDouble("amount") ?: 0.0,
+                note = d.getString("note") ?: "",
+                date = d.getString("date") ?: ""
+            )
+        }
+    }
+
+    /**
+     * Re-creates a previously deleted person (undo): restores the contact doc with its
+     * balance intact and re-adds each captured ledger entry under its original id.
+     * Chunked into batches to respect the 500-op cap.
+     */
+    suspend fun restorePerson(person: Person, entries: List<LedgerEntry>) {
+        val personRef = contactsRef().document(person.id)
+        val personFields = mapOf(
+            "name" to person.name,
+            "note" to person.note,
+            "balance" to person.balance,
+            "createdAt" to person.createdAt
+        )
+        if (entries.isEmpty()) {
+            personRef.set(personFields).await()
+            return
+        }
+        entries.chunked(450).forEachIndexed { index, chunk ->
+            val batch = db.batch()
+            if (index == 0) batch.set(personRef, personFields)
+            chunk.forEach { e ->
+                batch.set(
+                    personRef.collection("ledger").document(e.id),
+                    mapOf("amount" to e.amount, "note" to e.note, "date" to e.date)
+                )
+            }
+            batch.commit().await()
+        }
+    }
+
     // ── Categories ──────────────────────────────────────────────────────────
     // Stored as users/{uid}/categories/{key}. Built-ins are seeded once and are
     // fully editable thereafter. A deleted category needs no data migration: an
@@ -722,6 +852,46 @@ class FinanceRepository(private val uid: String) {
                 }.await()
             }
         }
+    }
+
+    // ── Quick-add templates ─────────────────────────────────────────────────
+    // Stored as users/{uid}/templates/{id}. One-tap chips on Add Entry that
+    // prefill category + amount + note. Ordered newest-first so a freshly saved
+    // template surfaces at the front of the row.
+
+    fun observeTemplates(): Flow<List<Template>> = callbackFlow {
+        val reg = templatesRef().orderBy("createdAt", Query.Direction.DESCENDING)
+            .addSnapshotListener { snap, err ->
+                if (err != null) return@addSnapshotListener
+                val list = snap?.documents?.map { d ->
+                    Template(
+                        id = d.id,
+                        label = d.getString("label") ?: "",
+                        category = d.getString("category") ?: "other",
+                        amount = d.getDouble("amount") ?: 0.0,
+                        note = d.getString("note") ?: "",
+                        createdAt = d.getString("createdAt") ?: ""
+                    )
+                }.orEmpty()
+                trySend(list)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun addTemplate(template: Template) {
+        templatesRef().document().set(
+            mapOf(
+                "label" to template.label,
+                "category" to template.category,
+                "amount" to template.amount,
+                "note" to template.note,
+                "createdAt" to template.createdAt
+            )
+        ).await()
+    }
+
+    suspend fun deleteTemplate(id: String) {
+        templatesRef().document(id).delete().await()
     }
 
     /**

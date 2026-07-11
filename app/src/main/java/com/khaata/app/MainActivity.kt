@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -53,6 +54,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -102,6 +104,7 @@ import com.khaata.app.onboarding.hasTutorialBeenSeen
 import com.khaata.app.onboarding.isOnboardingComplete
 import com.khaata.app.onboarding.markTutorialSeen
 import com.khaata.app.onboarding.resetAllTutorials
+import com.khaata.app.security.isAppLockEnabled
 import com.khaata.app.tutorial.TutorialContent
 import com.khaata.app.tutorial.TutorialOverlay
 import com.khaata.app.ui.screens.AddEntryScreen
@@ -110,6 +113,7 @@ import com.khaata.app.ui.screens.AuthScreen
 import com.khaata.app.ui.screens.DashboardScreen
 import com.khaata.app.ui.screens.GoalsScreen
 import com.khaata.app.ui.screens.HistoryScreen
+import com.khaata.app.ui.screens.PeopleScreen
 import com.khaata.app.ui.screens.BudgetsScreen
 import com.khaata.app.ui.screens.CategoryManagementScreen
 import com.khaata.app.ui.screens.ExportScreen
@@ -138,6 +142,7 @@ enum class KhaataTab(val label: String, val icon: ImageVector) {
     BUDGETS("Budgets", Icons.AutoMirrored.Filled.ListAlt),
     ENTRY("Add Entry", Icons.Filled.Add),
     GOALS("Goals", Icons.Filled.Flag),
+    PEOPLE("People", Icons.Filled.People),
     SEARCH("Search", Icons.Filled.Search),
     HISTORY("History", Icons.Filled.History),
 }
@@ -180,21 +185,30 @@ class MainActivity : FragmentActivity() {
                     val auth = FirebaseAuth.getInstance()
                     val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
                         uid = firebaseAuth.currentUser?.uid
-                        unlocked = false
+                        // With the app-open lock off (default), there's nothing to
+                        // unlock — go straight in. With it on, re-arm the gate on
+                        // every auth change so a fresh sign-in must unlock.
+                        unlocked = !isAppLockEnabled(this@MainActivity)
                         checkedSession = true
                     }
                     auth.addAuthStateListener(listener)
                     onDispose { auth.removeAuthStateListener(listener) }
                 }
 
+                // Load the onboarding flag whenever we become unlocked for a signed-in
+                // user — previously this only happened inside the gate's onUnlocked, so
+                // skipping the gate must not skip loading it (else onboarding re-shows).
+                LaunchedEffect(unlocked, uid) {
+                    if (unlocked && uid != null) {
+                        onboardingDone = isOnboardingComplete(this@MainActivity)
+                    }
+                }
+
                 when {
                     !checkedSession -> LoadingScreen()
                     uid == null -> AuthScreen()
                     !unlocked -> SecurityGateScreen(
-                        onUnlocked = {
-                            unlocked = true
-                            onboardingDone = isOnboardingComplete(this@MainActivity)
-                        },
+                        onUnlocked = { unlocked = true },
                         onSignOut = { FirebaseAuth.getInstance().signOut() }
                     )
                     else -> {
@@ -221,7 +235,9 @@ class MainActivity : FragmentActivity() {
                                 openEntryTabRequested = openEntryTabRequested,
                                 onOpenEntryTabHandled = { openEntryTabRequested = false },
                                 onSignOut = {
-                                    unlocked = false
+                                    // The auth listener recomputes `unlocked` from the
+                                    // lock preference on sign-out, so no manual reset
+                                    // here (which would briefly flash the gate).
                                     FirebaseAuth.getInstance().signOut()
                                 }
                             )
@@ -309,7 +325,7 @@ fun KhaataApp(
     val primaryTabs = remember {
         listOf(
             KhaataTab.DASHBOARD,
-            KhaataTab.ANALYTICS,
+            KhaataTab.PEOPLE,
             KhaataTab.BUDGETS,
             KhaataTab.ENTRY,
             KhaataTab.GOALS
@@ -325,7 +341,11 @@ fun KhaataApp(
             val result = snackbarHostState.showSnackbar(
                 message = message.text,
                 actionLabel = message.actionLabel,
-                withDismissAction = message.actionLabel == null
+                withDismissAction = message.actionLabel == null,
+                // Material3 defaults to Indefinite whenever an actionLabel is set, so
+                // "Undo" snackbars would otherwise linger until tapped. Give the user
+                // ~10s to hit Undo, then let it auto-dismiss like the plain messages.
+                duration = if (message.actionLabel != null) SnackbarDuration.Long else SnackbarDuration.Short
             )
             if (result == SnackbarResult.ActionPerformed) message.onAction?.invoke()
         }
@@ -539,6 +559,7 @@ fun KhaataApp(
                     KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
                     KhaataTab.ENTRY -> AddEntryScreen(viewModel)
                     KhaataTab.GOALS -> GoalsScreen(viewModel)
+                    KhaataTab.PEOPLE -> PeopleScreen(viewModel)
                     KhaataTab.SEARCH -> SearchScreen(viewModel)
                     KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
                         viewModel.jumpToMonth(key)
@@ -588,6 +609,22 @@ fun KhaataApp(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                    )
+                    ListItem(
+                        headlineContent = { Text("Analytics") },
+                        supportingContent = { Text("Trends, category shifts & savings rate") },
+                        leadingContent = {
+                            Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable {
+                                    showMoreSheet = false
+                                    navigateTo(KhaataTab.ANALYTICS)
+                                }
+                            }
                     )
                     ListItem(
                         headlineContent = { Text("History") },
@@ -875,6 +912,7 @@ private fun tutorialIdFor(tab: KhaataTab): String? = when (tab) {
     KhaataTab.BUDGETS   -> TutorialContent.BUDGETS
     KhaataTab.ENTRY     -> TutorialContent.ADD_ENTRY
     KhaataTab.GOALS     -> TutorialContent.GOALS
+    KhaataTab.PEOPLE    -> null
     KhaataTab.SEARCH    -> null
     KhaataTab.HISTORY   -> TutorialContent.HISTORY
 }

@@ -30,6 +30,19 @@ data class RecurringExpense(
     val lastPostedMonth: String = ""
 )
 
+/**
+ * A one-tap expense template ("Chai ₹10"). Prefills the Add Entry form with a
+ * saved category + amount + note; [label] is the chip text shown to the user.
+ */
+data class Template(
+    val id: String = "",
+    val label: String = "",
+    val category: String = "other",
+    val amount: Double = 0.0,
+    val note: String = "",
+    val createdAt: String = ""
+)
+
 /** A monthly category budget, e.g. Food = ₹3,000 for 2026-06. */
 data class Budget(
     val id: String = "",
@@ -166,6 +179,34 @@ fun Goal.computeStats(currentMonthKey: String): GoalStats {
     }
     return GoalStats(daysLeft, monthsLeftRaw, remaining, achieved, overdue, requiredMonthly, contributedThisMonth, pct, status, nextMilestonePct)
 }
+
+/**
+ * A person in the udhaar (credit) ledger — someone you've lent money to or borrowed
+ * from. [balance] is the running net, kept on the doc itself (like a goal's savedAmount)
+ * so a card never sums the ledger just to show who owes whom:
+ *   balance > 0  → they owe you (you gave/lent)
+ *   balance < 0  → you owe them (you got/borrowed)
+ *   balance == 0 → settled
+ */
+data class Person(
+    val id: String = "",
+    val name: String = "",
+    val note: String = "",
+    val balance: Double = 0.0,
+    val createdAt: String = ""
+)
+
+/**
+ * One entry in a person's udhaar ledger. [amount] is the signed delta applied to the
+ * person's balance: positive = you gave, negative = you got. So the running balance is
+ * just the sum of every entry's amount.
+ */
+data class LedgerEntry(
+    val id: String = "",
+    val amount: Double = 0.0,
+    val note: String = "",
+    val date: String = "" // yyyy-MM-dd
+)
 
 fun currentMonthKey(): String = YearMonth.now().toString()
 fun monthKeyFromDate(date: String): String = if (date.length >= 7) date.substring(0, 7) else currentMonthKey()
