@@ -167,7 +167,11 @@ class MainActivity : FragmentActivity() {
                 var uid by remember { mutableStateOf<String?>(null) }
                 var checkedSession by remember { mutableStateOf(false) }
                 var unlocked by remember { mutableStateOf(false) }
-                var onboardingDone by remember { mutableStateOf(false) }
+                // null = the DataStore flag hasn't been read yet. Starting at `false`
+                // rendered the first-run OnboardingScreen for a frame on every cold
+                // start (the async read below resolves after the first composition),
+                // flashing the wizard at returning users. Gate on null until it loads.
+                var onboardingDone by remember { mutableStateOf<Boolean?>(null) }
                 val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
                 ) { }
@@ -211,11 +215,14 @@ class MainActivity : FragmentActivity() {
                         onUnlocked = { unlocked = true },
                         onSignOut = { FirebaseAuth.getInstance().signOut() }
                     )
+                    // Onboarding flag still loading — hold on the loader rather than
+                    // flashing the wizard for a frame.
+                    onboardingDone == null -> LoadingScreen()
                     else -> {
                         val viewModel: FinanceViewModel = viewModel(
                             factory = FinanceViewModelFactory(FinanceRepository(uid!!))
                         )
-                        if (!onboardingDone) {
+                        if (onboardingDone == false) {
                             OnboardingScreen(
                                 viewModel = viewModel,
                                 onComplete = { onboardingDone = true }

@@ -61,6 +61,8 @@ fun SearchScreen(viewModel: FinanceViewModel) {
     val allExpenses by viewModel.allExpenses.collectAsState()
     val loading by viewModel.allExpensesLoading.collectAsState()
     val categories by viewModel.categories.collectAsState()
+    val goals by viewModel.goals.collectAsState()
+    val people by viewModel.people.collectAsState()
     val scope = rememberCoroutineScope()
 
     // All-time expenses are a one-shot snapshot (not a live listener), so refresh
@@ -98,12 +100,25 @@ fun SearchScreen(viewModel: FinanceViewModel) {
     val anyFilterActive = query.isNotBlank() || categoryFilter != null ||
         minAmount.isNotBlank() || maxAmount.isNotBlank() || fromDate.isNotBlank() || toDate.isNotBlank()
 
+    // Goals and people match on the text query only (the amount/date/category filters
+    // are expense-specific). Shown as their own sections so search spans the whole app,
+    // not just the expense ledger.
+    val matchedGoals = remember(goals, query) {
+        val q = query.trim().lowercase()
+        if (q.isBlank()) emptyList() else goals.filter { it.name.lowercase().contains(q) }
+    }
+    val matchedPeople = remember(people, query) {
+        val q = query.trim().lowercase()
+        if (q.isBlank()) emptyList()
+        else people.filter { it.name.lowercase().contains(q) || it.note.lowercase().contains(q) }
+    }
+
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                label = { Text("Search notes & categories") },
+                label = { Text("Search expenses, goals & people") },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
@@ -171,6 +186,47 @@ fun SearchScreen(viewModel: FinanceViewModel) {
                     }) { Text("Clear") }
                 }
             }
+        }
+
+        if (matchedGoals.isNotEmpty()) {
+            item { Text("Goals", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Muted) }
+            items(matchedGoals, key = { "goal_${it.id}" }) { g ->
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(g.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(
+                            "${formatINR(g.savedAmount)} / ${formatINR(g.targetAmount)}",
+                            fontSize = 12.sp, color = Muted
+                        )
+                    }
+                    HorizontalDivider(Modifier, DividerDefaults.Thickness, color = PaperLine)
+                }
+            }
+        }
+
+        if (matchedPeople.isNotEmpty()) {
+            item { Text("People", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Muted) }
+            items(matchedPeople, key = { "person_${it.id}" }) { p ->
+                val status = when {
+                    kotlin.math.abs(p.balance) < 0.001 -> "Settled"
+                    p.balance > 0.0 -> "Owes you ${formatINR(p.balance)}"
+                    else -> "You owe ${formatINR(-p.balance)}"
+                }
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(p.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            if (p.note.isNotBlank()) Text(p.note, fontSize = 11.sp, color = Muted)
+                        }
+                        Text(status, fontSize = 12.sp, color = Muted)
+                    }
+                    HorizontalDivider(Modifier, DividerDefaults.Thickness, color = PaperLine)
+                }
+            }
+        }
+
+        if (query.isNotBlank() && (matchedGoals.isNotEmpty() || matchedPeople.isNotEmpty())) {
+            item { Text("Expenses", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Muted) }
         }
 
         if (loading && allExpenses.isEmpty()) {

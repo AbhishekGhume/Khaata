@@ -11,8 +11,8 @@ import androidx.core.content.ContextCompat
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action
-        if (action == Intent.ACTION_BOOT_COMPLETED) {
-            // Reschedule if user has enabled daily reminder
+        // Both a reboot and an app update wipe scheduled alarms, so re-arm on either.
+        if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             val settings = loadReminderSettings(context)
             if (settings.dailyReminderEnabled) {
                 scheduleDailyReminder(context, settings.dailyReminderHour, settings.dailyReminderMinute)
@@ -20,9 +20,18 @@ class AlarmReceiver : BroadcastReceiver() {
             return
         }
 
-        // Regular alarm: show the daily logging reminder — but only if we're allowed
-        // to post. From Android 13 on, notify() silently no-ops without the runtime
-        // permission; guard inline so Lint's MissingPermission detector sees it.
+        // Regular daily alarm. The exact alarm is one-shot (see scheduleDailyReminder),
+        // so re-arm tomorrow's before anything else — even if the notification is later
+        // suppressed for lack of permission, the schedule must survive so it keeps
+        // trying once the user grants it.
+        val settings = loadReminderSettings(context)
+        if (settings.dailyReminderEnabled) {
+            scheduleDailyReminder(context, settings.dailyReminderHour, settings.dailyReminderMinute)
+        }
+
+        // Show the daily logging reminder — but only if we're allowed to post. From
+        // Android 13 on, notify() silently no-ops without the runtime permission;
+        // guard inline so Lint's MissingPermission detector sees it.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {

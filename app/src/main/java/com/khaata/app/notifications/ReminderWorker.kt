@@ -57,13 +57,17 @@ class ReminderWorker(
             showReminderNotification(applicationContext, BUDGET_WARNING_NOTIFICATION_ID, "Budget warning", message)
         }
 
+        // Only nag about inactivity once there's a real logging history to be
+        // inactive *from*. A brand-new user has no latest-expense date, and treating
+        // that as "999 days inactive" would greet them with an absurd first
+        // notification ("you haven't added anything in 999 days"). No history → no nag.
         val lastLoggedDate = repository.loadLatestExpenseDate(monthKey)
         val inactiveDays = lastLoggedDate?.let {
             val last = LocalDate.parse(it, DateTimeFormatter.ISO_DATE)
             java.time.temporal.ChronoUnit.DAYS.between(last, LocalDate.now()).toInt()
-        } ?: 999
+        }
 
-        if (settings.inactivityRemindersEnabled && inactiveDays >= 3) {
+        if (settings.inactivityRemindersEnabled && inactiveDays != null && inactiveDays >= 3) {
             showReminderNotification(
                 applicationContext,
                 INACTIVITY_NOTIFICATION_ID,

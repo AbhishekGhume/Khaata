@@ -110,8 +110,18 @@ fun scheduleDailyReminder(context: Context, hour: Int, minute: Int) {
         if (before(now)) add(Calendar.DAY_OF_MONTH, 1)
     }
 
-    // Use inexact repeating for battery friendliness
-    am.setInexactRepeating(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, AlarmManager.INTERVAL_DAY, pending)
+    // Prefer an exact alarm so "remind me at 20:00" actually lands near 20:00.
+    // setInexactRepeating batches with other alarms and, under Doze, can slip by
+    // hours or skip a day — which defeats a user-chosen reminder time. Exact alarms
+    // are one-shot, so AlarmReceiver re-arms the next day after it fires. On Android
+    // 12+ exact scheduling needs a permission we don't hold by default; if it's not
+    // granted we fall back to a daily inexact repeat rather than crash or go silent.
+    val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) am.canScheduleExactAlarms() else true
+    if (canExact) {
+        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, pending)
+    } else {
+        am.setInexactRepeating(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, AlarmManager.INTERVAL_DAY, pending)
+    }
 }
 
 fun cancelDailyReminder(context: Context) {

@@ -257,6 +257,19 @@ private fun RecurringEditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                // Days 29–31 don't exist in every month. postDueRecurring clamps to the
+                // month's last day, so tell the user rather than letting them assume it
+                // silently skips (Feb) or posts on a day that isn't there.
+                day.toIntOrNull()?.let { d ->
+                    if (d in 29..31) {
+                        Text(
+                            "In shorter months this posts on the last day instead " +
+                                "(e.g. day $d → Feb 28/29).",
+                            color = Muted,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = note, onValueChange = { note = it }, label = { Text("Note (optional)") },
                     singleLine = true, modifier = Modifier.fillMaxWidth()

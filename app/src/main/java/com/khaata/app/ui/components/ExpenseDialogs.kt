@@ -48,6 +48,7 @@ import com.khaata.app.util.evaluateExpression
 import com.khaata.app.util.formatINR
 import com.khaata.app.util.isMoneyOrExprInputAllowed
 import com.khaata.app.util.looksLikeExpression
+import com.khaata.app.util.moneyToInput
 
 /** A category picker driven by the live category list. Shared by every entry form. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,7 +89,7 @@ fun EditExpenseDialog(
 ) {
     var category by remember { mutableStateOf(expense.category) }
     var categoryExpanded by remember { mutableStateOf(false) }
-    var amount by remember { mutableStateOf(if (expense.amount == 0.0) "" else expense.amount.toString()) }
+    var amount by remember { mutableStateOf(moneyToInput(expense.amount)) }
     var note by remember { mutableStateOf(expense.note) }
     var date by remember { mutableStateOf(expense.date) }
     var error by remember { mutableStateOf<String?>(null) }

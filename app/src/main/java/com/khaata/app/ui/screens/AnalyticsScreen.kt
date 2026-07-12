@@ -207,13 +207,30 @@ fun AnalyticsScreen(viewModel: FinanceViewModel) {
         }
 
         item {
+            // `previousMonth` is the most recent month with data before the viewed one,
+            // which isn't necessarily the calendar-previous month (a user can skip a
+            // month). Label the comparison with the actual month being compared so a
+            // May-vs-July gap never masquerades as "vs last month".
+            val isAdjacent = previousMonth != null &&
+                previousMonth.monthKey == com.khaata.app.data.model.shiftMonth(viewedMonthKey, -1)
             AnalyticsSection(
                 title = "Compared to previous month",
-                subtitle = "Selected month vs last month"
+                subtitle = if (previousMonth == null) "Selected month vs earlier data"
+                    else "${monthLabel(viewedMonthKey)} vs ${monthLabel(previousMonth.monthKey)}"
             ) {
                 if (previousMonth == null) {
                     Text("No previous month data available yet.", color = Muted, fontSize = 12.sp)
                 } else {
+                    val comparedLabel = monthLabel(previousMonth.monthKey)
+                    if (!isAdjacent) {
+                        Text(
+                            "No data for the month right before this — comparing against $comparedLabel, " +
+                                "the latest month with entries.",
+                            color = Muted,
+                            fontSize = 11.5.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     val netDelta = monthSummary.netSavings - previousMonth.netSavings
                     val previousGoalsSaved = goalsSavedByMonth[previousMonth.monthKey] ?: 0.0
                     val previousFree = previousMonth.netSavings - previousGoalsSaved
@@ -227,9 +244,9 @@ fun AnalyticsScreen(viewModel: FinanceViewModel) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         if (netDelta >= 0.0) {
-                            "Good: net savings improved by ${formatINR(netDelta)} from previous month."
+                            "Good: net savings improved by ${formatINR(netDelta)} from $comparedLabel."
                         } else {
-                            "Alert: net savings dropped by ${formatINR(kotlin.math.abs(netDelta))} from previous month."
+                            "Alert: net savings dropped by ${formatINR(kotlin.math.abs(netDelta))} from $comparedLabel."
                         },
                         color = if (netDelta >= 0.0) Green else Rust,
                         fontSize = 12.sp
@@ -391,9 +408,18 @@ private fun IncomeSplitBar(
         return
     }
 
-    val spentPart = kharcha.coerceAtLeast(0.0).coerceAtMost(income)
-    val goalsPart = goalsSaved.coerceAtLeast(0.0).coerceAtMost((income - spentPart).coerceAtLeast(0.0))
-    val freePart = freeAmount.coerceAtLeast(0.0).coerceAtMost((income - spentPart - goalsPart).coerceAtLeast(0.0))
+    // Actual money out, uncapped. Goals saved and kharcha both stay visible even when
+    // together they exceed income — the old version capped spend at income and let goal
+    // savings (and any overspend signal) silently collapse to zero.
+    val spentPart = kharcha.coerceAtLeast(0.0)
+    val goalsPart = goalsSaved.coerceAtLeast(0.0)
+    val freePart = freeAmount.coerceAtLeast(0.0)
+    val overspent = (spentPart + goalsPart) > income + 0.001
+
+    // Scale the bar to whichever is larger: income, or what actually went out. When
+    // overspent there's no green "free" slice — the bar is fully spend + goals — and
+    // the note below calls out the shortfall instead of hiding it.
+    val basis = max(income, spentPart + goalsPart)
 
     Surface(
         color = PaperLine,
@@ -419,11 +445,12 @@ private fun IncomeSplitBar(
                         .background(Gold)
                 )
             }
-            if (freePart > 0.0) {
+            val remainder = (basis - spentPart - goalsPart).toFloat()
+            if (remainder > 0.0f) {
                 Box(
                     Modifier
                         .fillMaxHeight()
-                        .weight(freePart.toFloat())
+                        .weight(remainder)
                         .background(Green)
                 )
             }
@@ -431,11 +458,21 @@ private fun IncomeSplitBar(
     }
     Spacer(Modifier.height(6.dp))
     Text(
-        "Income ${formatINR(income)} = Kharcha ${formatINR(spentPart)} + Goals ${formatINR(goalsPart)} + Free ${formatINR(freePart)}",
+        "Income ${formatINR(income)} = Kharcha ${formatINR(spentPart)} + Goals ${formatINR(goalsPart)}" +
+            if (overspent) "" else " + Free ${formatINR(freePart)}",
         color = Muted,
         fontSize = 11.sp,
         fontFamily = FontFamily.Monospace
     )
+    if (overspent) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "You spent and saved ${formatINR(spentPart + goalsPart - income)} more than your income " +
+                "this month — the extra came from savings or borrowing.",
+            color = Rust,
+            fontSize = 11.sp
+        )
+    }
 }
 
 @Composable

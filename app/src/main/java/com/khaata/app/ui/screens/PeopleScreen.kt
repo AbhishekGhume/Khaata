@@ -94,6 +94,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
     var entryAmount by remember { mutableStateOf("") }
     var entryNote by remember { mutableStateOf("") }
     var entryDate by remember { mutableStateOf(todayStr()) }
+    var entryError by remember { mutableStateOf<String?>(null) }
 
     var personToSettle by remember { mutableStateOf<Person?>(null) }
     var personToDelete by remember { mutableStateOf<Person?>(null) }
@@ -101,7 +102,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
     fun openEntry(personId: String, gave: Boolean) {
         openEntryPersonId = personId
         entryGave = gave
-        entryAmount = ""; entryNote = ""; entryDate = todayStr()
+        entryAmount = ""; entryNote = ""; entryDate = todayStr(); entryError = null
     }
 
     LazyColumn(
@@ -221,17 +222,20 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
                 entryAmount = entryAmount,
                 entryNote = entryNote,
                 entryDate = entryDate,
+                entryError = if (openEntryPersonId == person.id) entryError else null,
                 onOpenGave = { openEntry(person.id, true) },
                 onOpenGot = { openEntry(person.id, false) },
-                onCloseEntry = { openEntryPersonId = null },
-                onEntryAmountChange = { entryAmount = it },
+                onCloseEntry = { openEntryPersonId = null; entryError = null },
+                onEntryAmountChange = { entryAmount = it; entryError = null },
                 onEntryNoteChange = { entryNote = it },
                 onEntryDateChange = { entryDate = it },
                 onSaveEntry = {
                     val amt = entryAmount.toDoubleOrNull()
                     if (amt != null && amt > 0) {
                         viewModel.recordLedgerEntry(person.id, if (entryGave) amt else -amt, entryNote, entryDate)
-                        openEntryPersonId = null; entryAmount = ""; entryNote = ""
+                        openEntryPersonId = null; entryAmount = ""; entryNote = ""; entryError = null
+                    } else {
+                        entryError = "Enter an amount greater than 0."
                     }
                 },
                 onDeleteEntry = { entry -> viewModel.deleteLedgerEntry(person.id, entry) },
@@ -294,6 +298,7 @@ private fun PersonCard(
     entryAmount: String,
     entryNote: String,
     entryDate: String,
+    entryError: String?,
     onOpenGave: () -> Unit,
     onOpenGot: () -> Unit,
     onCloseEntry: () -> Unit,
@@ -461,6 +466,7 @@ private fun PersonCard(
                                 onValueChange = { if (isMoneyInputAllowed(it)) onEntryAmountChange(it) },
                                 label = { Text("Amount (₹)") },
                                 modifier = Modifier.width(130.dp),
+                                isError = entryError != null,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                             )
                             OutlinedTextField(
@@ -486,6 +492,9 @@ private fun PersonCard(
                                 Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("Save")
+                            }
+                            if (entryError != null) {
+                                Text(entryError, color = Rust, fontSize = 12.sp)
                             }
                         }
                     }

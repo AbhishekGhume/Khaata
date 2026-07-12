@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,6 +63,33 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
     var settings by remember { mutableStateOf(loadReminderSettings(context)) }
     var hour by remember { mutableStateOf(settings.dailyReminderHour) }
     var minute by remember { mutableStateOf(settings.dailyReminderMinute) }
+
+    // Whether the OS will actually let notifications through. Below Android 13 the
+    // permission doesn't exist, so it's always granted. This is the missing feedback
+    // loop: without it a user flips every reminder switch ON, the permission was
+    // denied once at first launch, and nothing ever fires — with no hint why.
+    fun notificationsGranted(): Boolean =
+        android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    var notificationsAllowed by remember { mutableStateOf(notificationsGranted()) }
+
+    // Re-check on resume so returning from system settings (where the user may have
+    // toggled the permission) refreshes the banner without needing a screen reload.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                notificationsAllowed = notificationsGranted()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val anyNotificationOn = settings.budgetWarningsEnabled || settings.inactivityRemindersEnabled ||
+        settings.goalMilestonesEnabled || settings.dailyReminderEnabled
 
     LaunchedEffect(settings) {
         saveReminderSettings(context, settings)
@@ -97,6 +125,50 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
 
         Text("Notifications", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
         Text("Choose which local reminders you want Khaata to send.", color = Muted, fontSize = 13.sp)
+
+        // Reminders are worthless if the OS is dropping them. Surface that plainly the
+        // moment a reminder is on without permission, with a one-tap way to fix it,
+        // instead of letting the switches sit ON while nothing is ever delivered.
+        if (anyNotificationOn && !notificationsAllowed) {
+            Surface(
+                color = com.khaata.app.ui.theme.Rust.copy(alpha = 0.10f),
+                border = BorderStroke(1.dp, com.khaata.app.ui.theme.Rust.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+                    Text(
+                        "Notifications are blocked",
+                        color = com.khaata.app.ui.theme.Rust,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Khaata can't deliver these reminders until you allow notifications. " +
+                            "Your choices above are saved and will start working once you do.",
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            // Opening the app's own notification settings page works on
+                            // every Android version and can never silently no-op the way
+                            // a permanently-denied runtime permission request does — so the
+                            // user always has a real, non-dead-end way to turn them back on.
+                            // The ON_RESUME re-check clears this banner when they return.
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { context.startActivity(intent) }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = com.khaata.app.ui.theme.Rust, contentColor = Paper)
+                    ) {
+                        Text("Allow notifications")
+                    }
+                }
+            }
+        }
 
         SettingCard(
             title = "Budget warnings",

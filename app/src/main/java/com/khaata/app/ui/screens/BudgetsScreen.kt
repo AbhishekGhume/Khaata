@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -81,6 +82,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
     var budgetError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
     // (category, limitAmount) of the budget pending delete confirmation.
     var budgetToDelete by remember { mutableStateOf<Pair<String, Double>?>(null) }
+    var showCopyConfirm by remember { mutableStateOf(false) }
     val budgetWarning = remember(category, limitDraft) {
         val amt = limitDraft.toDoubleOrNull()
         if (amt != null && amt > 0) viewModel.budgetAllocationWarning(category, amt) else null
@@ -178,6 +180,16 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                         color = Muted,
                         fontSize = 12.sp
                     )
+                    if (isCurrentMonth) {
+                        TextButton(
+                            onClick = { showCopyConfirm = true },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                        ) {
+                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Copy last month's budgets")
+                        }
+                    }
                 }
             }
         }
@@ -224,6 +236,26 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                 }
             }
         }
+    }
+
+    if (showCopyConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCopyConfirm = false },
+            title = { Text("Copy last month's budgets?") },
+            text = {
+                Text(
+                    "This sets ${monthLabel(viewedMonthKey)}'s caps to match last month, category " +
+                        "for category. Any cap you've already set this month for the same category is overwritten."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.copyLastMonthBudgets()
+                    showCopyConfirm = false
+                }) { Text("Copy") }
+            },
+            dismissButton = { TextButton(onClick = { showCopyConfirm = false }) { Text("Cancel") } }
+        )
     }
 
     budgetToDelete?.let { (cat, limit) ->

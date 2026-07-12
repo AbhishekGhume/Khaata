@@ -72,6 +72,7 @@ import com.khaata.app.ui.theme.Rust
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.util.formatINR
 import com.khaata.app.util.isMoneyInputAllowed
+import com.khaata.app.util.moneyToInput
 import com.khaata.app.util.parsePositiveAmount
 import com.khaata.app.viewmodel.FinanceViewModel
 
@@ -96,6 +97,7 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
     var openContribGoalId by remember { mutableStateOf<String?>(null) }
     var contribAmount by remember { mutableStateOf("") }
     var contribDate by remember { mutableStateOf(todayStr()) }
+    var contribError by remember { mutableStateOf<String?>(null) }
 
     // Goal pending delete confirmation.
     var goalToDelete by remember { mutableStateOf<Goal?>(null) }
@@ -209,17 +211,20 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                 isContribOpen = openContribGoalId == goal.id,
                 contribAmount = contribAmount,
                 contribDate = contribDate,
+                contribError = if (openContribGoalId == goal.id) contribError else null,
                 onToggleContrib = {
                     openContribGoalId = if (openContribGoalId == goal.id) null else goal.id
-                    contribAmount = ""; contribDate = todayStr()
+                    contribAmount = ""; contribDate = todayStr(); contribError = null
                 },
-                onContribAmountChange = { contribAmount = it },
+                onContribAmountChange = { contribAmount = it; contribError = null },
                 onContribDateChange = { contribDate = it },
                 onSaveContrib = {
                     val amt = contribAmount.toDoubleOrNull()
                     if (amt != null && amt > 0) {
                         viewModel.logContribution(goal.id, amt, contribDate)
-                        openContribGoalId = null; contribAmount = ""
+                        openContribGoalId = null; contribAmount = ""; contribError = null
+                    } else {
+                        contribError = "Enter an amount greater than 0."
                     }
                 },
                 onSaveEdit = { goalId, amountDraft, dateDraft ->
@@ -283,6 +288,7 @@ private fun GoalCard(
     isContribOpen: Boolean,
     contribAmount: String,
     contribDate: String,
+    contribError: String?,
     onToggleContrib: () -> Unit,
     onContribAmountChange: (String) -> Unit,
     onContribDateChange: (String) -> Unit,
@@ -301,7 +307,7 @@ private fun GoalCard(
     }
     var showHistory by remember { mutableStateOf(false) }
     var isEditOpen by remember { mutableStateOf(false) }
-    var editTargetAmount by remember(goal.id) { mutableStateOf(goal.targetAmount.toString()) }
+    var editTargetAmount by remember(goal.id) { mutableStateOf(moneyToInput(goal.targetAmount)) }
     var editTargetDate by remember(goal.id) { mutableStateOf(goal.targetDate) }
     var editError by remember(goal.id) { mutableStateOf<String?>(null) }
 
@@ -426,7 +432,7 @@ private fun GoalCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = {
                     isEditOpen = !isEditOpen
-                    editTargetAmount = goal.targetAmount.toString()
+                    editTargetAmount = moneyToInput(goal.targetAmount)
                     editTargetDate = goal.targetDate
                     editError = null
                 }) {
@@ -520,6 +526,7 @@ private fun GoalCard(
                             onValueChange = { if (isMoneyInputAllowed(it)) onContribAmountChange(it) },
                             label = { Text("Amount (₹)") },
                             modifier = Modifier.width(130.dp),
+                            isError = contribError != null,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                         )
                         DatePickerField(
@@ -535,6 +542,9 @@ private fun GoalCard(
                             Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
                             Text("Save")
+                        }
+                        if (contribError != null) {
+                            Text(contribError, color = Rust, fontSize = 12.sp)
                         }
                     }
                 }
@@ -577,7 +587,7 @@ private fun EditContributionDialog(
     onDismiss: () -> Unit,
     onSave: (Double) -> Unit,
 ) {
-    var draft by remember { mutableStateOf(if (currentAmount == 0.0) "" else currentAmount.toString()) }
+    var draft by remember { mutableStateOf(moneyToInput(currentAmount)) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,

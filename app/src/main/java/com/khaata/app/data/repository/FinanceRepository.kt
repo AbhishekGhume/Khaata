@@ -166,6 +166,30 @@ class FinanceRepository(private val uid: String) {
         budgetsRef().document("${monthKey}_$category").delete().await()
     }
 
+    /**
+     * Copies every budget cap from [sourceMonthKey] into [targetMonthKey] (one flat doc
+     * per category, keyed `{month}_{category}`), overwriting any existing cap for the
+     * same category in the target month. Returns how many were copied (0 if the source
+     * month had none). One batch — all caps land together or none do.
+     */
+    suspend fun copyBudgets(sourceMonthKey: String, targetMonthKey: String): Int {
+        val source = budgetsRef().whereEqualTo("monthKey", sourceMonthKey).get().await().documents
+        if (source.isEmpty()) return 0
+        val batch = db.batch()
+        var copied = 0
+        source.forEach { d ->
+            val category = d.getString("category") ?: return@forEach
+            val limit = d.getDouble("limitAmount") ?: 0.0
+            batch.set(
+                budgetsRef().document("${targetMonthKey}_$category"),
+                mapOf("category" to category, "limitAmount" to limit, "monthKey" to targetMonthKey)
+            )
+            copied++
+        }
+        batch.commit().await()
+        return copied
+    }
+
     suspend fun latestBudgetProgress(monthKey: String): List<BudgetProgress> = loadBudgetProgress(monthKey)
 
     suspend fun loadLatestExpenseDate(monthKey: String): String? {
@@ -892,6 +916,314 @@ class FinanceRepository(private val uid: String) {
 
     suspend fun deleteTemplate(id: String) {
         templatesRef().document(id).delete().await()
+    }
+
+    /**
+     * A complete, portable JSON snapshot of everything this user owns — months and their
+     * expenses, budgets, goals and their contributions, people and their ledgers, plus
+     * custom categories, recurring templates and quick-add templates. This is the real
+     * "backup": unlike the expenses-only CSV/PDF, losing an account and restoring from
+     * this file would preserve the udhaar ledger and savings goals too.
+     *
+     * Built with Android's bundled org.json (no extra dependency). Every document is read
+     * once here; it's an explicit user action on a bounded dataset, so the fan-out is fine.
+     */
+    suspend fun buildBackupJson(generatedAt: String): String {
+        val root = org.json.JSONObject()
+        root.put("schema", "khaata-backup")
+        root.put("version", 1)
+        root.put("uid", uid)
+        root.put("generatedAt", generatedAt)
+
+        // Months + their expenses.
+        val monthsArr = org.json.JSONArray()
+        for (m in monthsRef().get().await().documents) {
+            val monthObj = org.json.JSONObject()
+                .put("monthKey", m.id)
+                .put("income", m.getDouble("income") ?: 0.0)
+                .put("totalExpenses", m.getDouble("totalExpenses") ?: 0.0)
+            val expArr = org.json.JSONArray()
+            for (e in m.reference.collection("expenses").get().await().documents) {
+                expArr.put(
+                    org.json.JSONObject()
+                        .put("id", e.id)
+                        .put("category", e.getString("category") ?: "other")
+                        .put("amount", e.getDouble("amount") ?: 0.0)
+                        .put("note", e.getString("note") ?: "")
+                        .put("date", e.getString("date") ?: "")
+                )
+            }
+            monthObj.put("expenses", expArr)
+            monthsArr.put(monthObj)
+        }
+        root.put("months", monthsArr)
+
+        // Budgets (flat collection).
+        val budgetsArr = org.json.JSONArray()
+        for (b in budgetsRef().get().await().documents) {
+            budgetsArr.put(
+                org.json.JSONObject()
+                    .put("id", b.id)
+                    .put("category", b.getString("category") ?: "other")
+                    .put("limitAmount", b.getDouble("limitAmount") ?: 0.0)
+                    .put("monthKey", b.getString("monthKey") ?: "")
+            )
+        }
+        root.put("budgets", budgetsArr)
+
+        // Goals + their contributions.
+        val goalsArr = org.json.JSONArray()
+        for (g in goalsRef().get().await().documents) {
+            @Suppress("UNCHECKED_CAST")
+            val rawContrib = g.get("monthlyContributions") as? Map<String, Any?> ?: emptyMap()
+            val monthly = org.json.JSONObject()
+            rawContrib.forEach { (k, v) -> monthly.put(k, (v as? Number)?.toDouble() ?: 0.0) }
+            val goalObj = org.json.JSONObject()
+                .put("id", g.id)
+                .put("name", g.getString("name") ?: "")
+                .put("targetAmount", g.getDouble("targetAmount") ?: 0.0)
+                .put("targetDate", g.getString("targetDate") ?: "")
+                .put("createdAt", g.getString("createdAt") ?: "")
+                .put("savedAmount", g.getDouble("savedAmount") ?: 0.0)
+                .put("monthlyContributions", monthly)
+            val contribArr = org.json.JSONArray()
+            for (c in g.reference.collection("contributions").get().await().documents) {
+                contribArr.put(
+                    org.json.JSONObject()
+                        .put("id", c.id)
+                        .put("amount", c.getDouble("amount") ?: 0.0)
+                        .put("date", c.getString("date") ?: "")
+                )
+            }
+            goalObj.put("contributions", contribArr)
+            goalsArr.put(goalObj)
+        }
+        root.put("goals", goalsArr)
+
+        // People (udhaar) + their ledgers.
+        val peopleArr = org.json.JSONArray()
+        for (p in contactsRef().get().await().documents) {
+            val personObj = org.json.JSONObject()
+                .put("id", p.id)
+                .put("name", p.getString("name") ?: "")
+                .put("note", p.getString("note") ?: "")
+                .put("balance", p.getDouble("balance") ?: 0.0)
+                .put("createdAt", p.getString("createdAt") ?: "")
+            val ledgerArr = org.json.JSONArray()
+            for (l in p.reference.collection("ledger").get().await().documents) {
+                ledgerArr.put(
+                    org.json.JSONObject()
+                        .put("id", l.id)
+                        .put("amount", l.getDouble("amount") ?: 0.0)
+                        .put("note", l.getString("note") ?: "")
+                        .put("date", l.getString("date") ?: "")
+                )
+            }
+            personObj.put("ledger", ledgerArr)
+            peopleArr.put(personObj)
+        }
+        root.put("people", peopleArr)
+
+        // Custom categories, recurring templates, quick-add templates.
+        val categoriesArr = org.json.JSONArray()
+        for (c in categoriesRef().get().await().documents) {
+            categoriesArr.put(
+                org.json.JSONObject()
+                    .put("key", c.id)
+                    .put("label", c.getString("label") ?: "")
+                    .put("colorArgb", c.getLong("colorArgb") ?: 0L)
+                    .put("iconKey", c.getString("iconKey") ?: "category")
+                    .put("order", c.getLong("order") ?: 0L)
+            )
+        }
+        root.put("categories", categoriesArr)
+
+        val recurringArr = org.json.JSONArray()
+        for (r in recurringRef().get().await().documents) {
+            recurringArr.put(
+                org.json.JSONObject()
+                    .put("id", r.id)
+                    .put("category", r.getString("category") ?: "other")
+                    .put("amount", r.getDouble("amount") ?: 0.0)
+                    .put("note", r.getString("note") ?: "")
+                    .put("dayOfMonth", r.getLong("dayOfMonth") ?: 1L)
+                    .put("active", r.getBoolean("active") ?: true)
+                    .put("createdAt", r.getString("createdAt") ?: "")
+                    .put("lastPostedMonth", r.getString("lastPostedMonth") ?: "")
+            )
+        }
+        root.put("recurring", recurringArr)
+
+        val templatesArr = org.json.JSONArray()
+        for (t in templatesRef().get().await().documents) {
+            templatesArr.put(
+                org.json.JSONObject()
+                    .put("id", t.id)
+                    .put("label", t.getString("label") ?: "")
+                    .put("category", t.getString("category") ?: "other")
+                    .put("amount", t.getDouble("amount") ?: 0.0)
+                    .put("note", t.getString("note") ?: "")
+                    .put("createdAt", t.getString("createdAt") ?: "")
+            )
+        }
+        root.put("templates", templatesArr)
+
+        return root.toString(2)
+    }
+
+    /**
+     * Restores everything from a [buildBackupJson] file back into this user's account.
+     *
+     * Semantics: **overwrite by original id**. Every document is written with `set()`
+     * under the same id it had in the backup, so restoring into an empty account
+     * rebuilds it exactly (running totals like savedAmount/balance/totalExpenses are
+     * stored absolute values in the backup, so they land consistent with the
+     * subcollection rows). Restoring over an account that still has data merges the two
+     * by id — matching ids are overwritten, and any local docs NOT in the backup are
+     * left untouched (which can leave those months' totals inconsistent; the intended
+     * use is rebuilding a lost/empty account, and the UI says so).
+     *
+     * Writes are committed in ≤450-op chunks to respect Firestore's 500-op batch cap.
+     * Returns the number of documents written. Throws IllegalArgumentException on a file
+     * that isn't a Khaata backup so the caller can show a clear message.
+     */
+    suspend fun restoreFromBackup(json: String): Int {
+        val root = runCatching { org.json.JSONObject(json) }
+            .getOrElse { throw IllegalArgumentException("Not a valid backup file.") }
+        if (root.optString("schema") != "khaata-backup") {
+            throw IllegalArgumentException("This file isn't a Khaata backup.")
+        }
+
+        // (reference, data) pairs collected first, then flushed in bounded batches.
+        val writes = mutableListOf<Pair<DocumentReference, Map<String, Any?>>>()
+
+        // Months + expenses.
+        val months = root.optJSONArray("months") ?: org.json.JSONArray()
+        for (i in 0 until months.length()) {
+            val m = months.getJSONObject(i)
+            val monthKey = m.getString("monthKey")
+            val monthRef = monthsRef().document(monthKey)
+            writes += monthRef to mapOf(
+                "income" to m.optDouble("income", 0.0),
+                "totalExpenses" to m.optDouble("totalExpenses", 0.0)
+            )
+            val expenses = m.optJSONArray("expenses") ?: org.json.JSONArray()
+            for (j in 0 until expenses.length()) {
+                val e = expenses.getJSONObject(j)
+                writes += monthRef.collection("expenses").document(e.getString("id")) to mapOf(
+                    "category" to e.optString("category", "other"),
+                    "amount" to e.optDouble("amount", 0.0),
+                    "note" to e.optString("note", ""),
+                    "date" to e.optString("date", "")
+                )
+            }
+        }
+
+        // Budgets.
+        val budgets = root.optJSONArray("budgets") ?: org.json.JSONArray()
+        for (i in 0 until budgets.length()) {
+            val b = budgets.getJSONObject(i)
+            writes += budgetsRef().document(b.getString("id")) to mapOf(
+                "category" to b.optString("category", "other"),
+                "limitAmount" to b.optDouble("limitAmount", 0.0),
+                "monthKey" to b.optString("monthKey", "")
+            )
+        }
+
+        // Goals + contributions.
+        val goals = root.optJSONArray("goals") ?: org.json.JSONArray()
+        for (i in 0 until goals.length()) {
+            val g = goals.getJSONObject(i)
+            val goalRef = goalsRef().document(g.getString("id"))
+            val monthly = g.optJSONObject("monthlyContributions") ?: org.json.JSONObject()
+            val monthlyMap = mutableMapOf<String, Double>()
+            monthly.keys().forEach { k -> monthlyMap[k] = monthly.optDouble(k, 0.0) }
+            writes += goalRef to mapOf(
+                "name" to g.optString("name", ""),
+                "targetAmount" to g.optDouble("targetAmount", 0.0),
+                "targetDate" to g.optString("targetDate", ""),
+                "createdAt" to g.optString("createdAt", ""),
+                "savedAmount" to g.optDouble("savedAmount", 0.0),
+                "monthlyContributions" to monthlyMap
+            )
+            val contribs = g.optJSONArray("contributions") ?: org.json.JSONArray()
+            for (j in 0 until contribs.length()) {
+                val c = contribs.getJSONObject(j)
+                writes += goalRef.collection("contributions").document(c.getString("id")) to mapOf(
+                    "amount" to c.optDouble("amount", 0.0),
+                    "date" to c.optString("date", "")
+                )
+            }
+        }
+
+        // People + ledgers.
+        val people = root.optJSONArray("people") ?: org.json.JSONArray()
+        for (i in 0 until people.length()) {
+            val p = people.getJSONObject(i)
+            val personRef = contactsRef().document(p.getString("id"))
+            writes += personRef to mapOf(
+                "name" to p.optString("name", ""),
+                "note" to p.optString("note", ""),
+                "balance" to p.optDouble("balance", 0.0),
+                "createdAt" to p.optString("createdAt", "")
+            )
+            val ledger = p.optJSONArray("ledger") ?: org.json.JSONArray()
+            for (j in 0 until ledger.length()) {
+                val l = ledger.getJSONObject(j)
+                writes += personRef.collection("ledger").document(l.getString("id")) to mapOf(
+                    "amount" to l.optDouble("amount", 0.0),
+                    "note" to l.optString("note", ""),
+                    "date" to l.optString("date", "")
+                )
+            }
+        }
+
+        // Categories.
+        val categories = root.optJSONArray("categories") ?: org.json.JSONArray()
+        for (i in 0 until categories.length()) {
+            val c = categories.getJSONObject(i)
+            writes += categoriesRef().document(c.getString("key")) to mapOf(
+                "label" to c.optString("label", ""),
+                "colorArgb" to c.optLong("colorArgb", 0L),
+                "iconKey" to c.optString("iconKey", "category"),
+                "order" to c.optLong("order", 0L)
+            )
+        }
+
+        // Recurring templates.
+        val recurring = root.optJSONArray("recurring") ?: org.json.JSONArray()
+        for (i in 0 until recurring.length()) {
+            val r = recurring.getJSONObject(i)
+            writes += recurringRef().document(r.getString("id")) to mapOf(
+                "category" to r.optString("category", "other"),
+                "amount" to r.optDouble("amount", 0.0),
+                "note" to r.optString("note", ""),
+                "dayOfMonth" to r.optInt("dayOfMonth", 1),
+                "active" to r.optBoolean("active", true),
+                "createdAt" to r.optString("createdAt", ""),
+                "lastPostedMonth" to r.optString("lastPostedMonth", "")
+            )
+        }
+
+        // Quick-add templates.
+        val templates = root.optJSONArray("templates") ?: org.json.JSONArray()
+        for (i in 0 until templates.length()) {
+            val t = templates.getJSONObject(i)
+            writes += templatesRef().document(t.getString("id")) to mapOf(
+                "label" to t.optString("label", ""),
+                "category" to t.optString("category", "other"),
+                "amount" to t.optDouble("amount", 0.0),
+                "note" to t.optString("note", ""),
+                "createdAt" to t.optString("createdAt", "")
+            )
+        }
+
+        writes.chunked(450).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { (ref, data) -> batch.set(ref, data) }
+            batch.commit().await()
+        }
+        return writes.size
     }
 
     /**

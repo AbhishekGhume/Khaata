@@ -226,6 +226,23 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
             .onFailure { postMessage("Couldn't save the budget.") }
     }
 
+    /**
+     * Rolls last month's budget caps into the current month, so a user doesn't have to
+     * re-enter the same caps every month. Only runs on the current month (budgets are
+     * only editable there); posts a clear message for the empty case.
+     */
+    fun copyLastMonthBudgets() = viewModelScope.launch {
+        val target = currentMonthKey()
+        if (_viewedMonthKey.value != target) return@launch
+        val source = shiftMonth(target, -1)
+        runCatching { repository.copyBudgets(source, target) }
+            .onSuccess { count ->
+                if (count == 0) postMessage("No budgets found for ${com.khaata.app.data.model.monthLabel(source)} to copy.")
+                else postMessage("Copied $count budget${if (count == 1) "" else "s"} from last month.")
+            }
+            .onFailure { postMessage("Couldn't copy last month's budgets.") }
+    }
+
     fun deleteBudget(category: String, limitAmount: Double) = viewModelScope.launch {
         if (_viewedMonthKey.value != currentMonthKey()) return@launch
         val monthKey = _viewedMonthKey.value
@@ -489,6 +506,40 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
             .onFailure { postMessage("Couldn't load expenses for search.") }
         _allExpensesLoading.value = false
     }
+
+    // ── Full backup ───────────────────────────────────────────────────────────
+
+    /**
+     * Builds a complete JSON backup off the main thread. Suspends so the caller can
+     * write + share it, and returns null (after posting a message) on failure so the
+     * UI never shows a "done" state for a backup that didn't actually build.
+     */
+    suspend fun buildBackupJson(): String? =
+        runCatching { repository.buildBackupJson(todayStr()) }
+            .onFailure { postMessage("Couldn't build the backup — please try again.") }
+            .getOrNull()
+
+    /**
+     * Restores everything from a backup file's [json] text. Returns true on success.
+     * Surfaces a specific message for a bad/again-non-backup file vs a write failure,
+     * so the user knows whether to pick a different file or just retry.
+     */
+    suspend fun restoreFromBackup(json: String): Boolean =
+        runCatching { repository.restoreFromBackup(json) }
+            .fold(
+                onSuccess = { count ->
+                    postMessage("Backup restored — $count records written.")
+                    true
+                },
+                onFailure = { err ->
+                    if (err is IllegalArgumentException) {
+                        postMessage(err.message ?: "That file isn't a valid Khaata backup.")
+                    } else {
+                        postMessage("Couldn't restore the backup — nothing was changed for the parts that failed.")
+                    }
+                    false
+                }
+            )
 }
 
 class FinanceViewModelFactory(private val repository: FinanceRepository) : ViewModelProvider.Factory {

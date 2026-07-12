@@ -78,6 +78,7 @@ import com.khaata.app.util.formatINR
 import com.khaata.app.util.isMoneyInputAllowed
 import com.khaata.app.util.isMoneyOrExprInputAllowed
 import com.khaata.app.util.looksLikeExpression
+import com.khaata.app.util.moneyToInput
 import com.khaata.app.viewmodel.FinanceViewModel
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -90,7 +91,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     val categories by viewModel.categories.collectAsState()
     val templates by viewModel.templates.collectAsState()
 
-    var incomeDraft by remember(monthSummary.income, viewedMonthKey) { mutableStateOf(if (monthSummary.income == 0.0) "" else monthSummary.income.toString()) }
+    var incomeDraft by remember(monthSummary.income, viewedMonthKey) { mutableStateOf(moneyToInput(monthSummary.income)) }
     var incomeError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
     var date by remember { mutableStateOf(todayStr()) }
     var categoryExpanded by remember { mutableStateOf(false) }
@@ -181,7 +182,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                             categories = categories,
                             onTap = {
                                 category = template.category
-                                amount = amountToInput(template.amount)
+                                amount = moneyToInput(template.amount)
                                 note = template.note
                                 amountError = null
                             },
@@ -334,10 +335,6 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
         )
     }
 }
-
-/** Formats a stored template amount back into the amount field's input string, dropping a trailing ".0". */
-private fun amountToInput(amount: Double): String =
-    if (amount == amount.toLong().toDouble()) amount.toLong().toString() else amount.toString()
 
 /**
  * A quick-add template chip. Tap fills the entry form; long-press asks to remove it.

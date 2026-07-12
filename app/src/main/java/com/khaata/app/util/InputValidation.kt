@@ -17,3 +17,14 @@ fun isMoneyInputAllowed(next: String): Boolean = next.isEmpty() || next.matches(
  * error rather than silently coercing junk to 0.
  */
 fun parsePositiveAmount(raw: String): Double? = raw.trim().toDoubleOrNull()?.takeIf { it > 0.0 }
+
+/**
+ * Formats a stored money amount back into an editable field string. Uses
+ * BigDecimal.toPlainString so we never hand the field `Double.toString`'s artifacts:
+ * a trailing ".0" ("50000.0") or, for large values, scientific notation ("1.0E8")
+ * — the latter of which `isMoneyInputAllowed`/`MONEY_REGEX` would reject, trapping
+ * the user until they clear the field. An amount of 0 prefills as blank so the
+ * placeholder shows through.
+ */
+fun moneyToInput(amount: Double): String =
+    if (amount == 0.0) "" else java.math.BigDecimal.valueOf(amount).stripTrailingZeros().toPlainString()
