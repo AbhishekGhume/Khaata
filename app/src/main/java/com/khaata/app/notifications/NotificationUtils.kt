@@ -14,6 +14,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.khaata.app.R
 import com.khaata.app.MainActivity
+import com.khaata.app.widget.QuickAddActivity
 import androidx.annotation.RequiresPermission
 import java.util.Calendar
 
@@ -22,6 +23,9 @@ const val BUDGET_WARNING_NOTIFICATION_ID = 1001
 const val INACTIVITY_NOTIFICATION_ID = 1002
 const val TEST_NOTIFICATION_ID = 1099
 const val EXTRA_OPEN_ADD_ENTRY = "com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY"
+// Optional preselected category key for the quick-add popup; shared by the widget
+// shortcuts and the notification "Quick add" action.
+const val EXTRA_QUICK_ADD_CATEGORY = "com.khaata.app.notifications.EXTRA_QUICK_ADD_CATEGORY"
 
 /**
  * True when we're allowed to post notifications. Below Android 13 the runtime
@@ -63,6 +67,15 @@ fun showReminderNotification(context: Context, id: Int, title: String, body: Str
         launchIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
+    // One-tap "Quick add" action: opens the lightweight popup that writes straight to
+    // Firestore, so the user can log an entry without loading the whole app.
+    val quickAddIntent = Intent(context, QuickAddActivity::class.java)
+    val quickAddPending = PendingIntent.getActivity(
+        context,
+        id + 40000,
+        quickAddIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
     val notification = NotificationCompat.Builder(context, KHAATA_NOTIFICATION_CHANNEL_ID)
         .setSmallIcon(R.mipmap.ic_launcher)
         .setContentTitle(title)
@@ -70,6 +83,7 @@ fun showReminderNotification(context: Context, id: Int, title: String, body: Str
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setContentIntent(contentIntent)
+        .addAction(R.mipmap.ic_launcher, "＋ Quick add", quickAddPending)
         .setAutoCancel(true)
         .build()
 

@@ -3,4 +3,13 @@
         <item name="android:statusBarColor">#1B2A38</item>
         <item name="android:windowBackground">#FBF8F1</item>
     </style>
+
+    <!-- Floating popup for the quick-add expense dialog. Transparent window so the
+         Compose PaperCard surface floats over a dimmed scrim; dismisses on outside tap. -->
+    <style name="Theme.Khaata.QuickAdd" parent="android:Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
 </resources>
