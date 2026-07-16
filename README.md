@@ -6,6 +6,8 @@ for udhaar, and analytics — all backed by Firebase Firestore so it persists an
 later sync across devices. Styled deliberately like a physical passbook rather than a
 generic Material demo.
 
+Get the latest apk 👉 https://drive.google.com/file/d/1gJsvNrTzMgQOHy6uH0kZjKnNvgm4dK0p/view?usp=drive_link
+
 ## Stack
 
 - **Kotlin** + **Jetpack Compose** (Material 3) — single-activity app, no XML layouts
