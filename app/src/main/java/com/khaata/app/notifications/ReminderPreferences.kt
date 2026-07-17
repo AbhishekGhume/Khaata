@@ -6,16 +6,18 @@ private const val PREFS_NAME = "khaata_reminders"
 private const val KEY_BUDGET_WARNINGS = "budget_warnings"
 private const val KEY_INACTIVITY_REMINDERS = "inactivity_reminders"
 private const val KEY_GOAL_MILESTONES = "goal_milestones"
+private const val KEY_UDHAAR_REMINDERS = "udhaar_reminders"
 private const val KEY_DAILY_REMINDER_ENABLED = "daily_reminder_enabled"
 private const val KEY_DAILY_REMINDER_HOUR = "daily_reminder_hour"
 private const val KEY_DAILY_REMINDER_MINUTE = "daily_reminder_minute"
 private const val KEY_GOAL_MILESTONE_PREFIX = "goal_milestone_"
+private const val KEY_UDHAAR_NUDGE_PREFIX = "udhaar_nudge_"
 
 data class ReminderSettings(
     val budgetWarningsEnabled: Boolean = true,
     val inactivityRemindersEnabled: Boolean = true,
-    val goalMilestonesEnabled: Boolean = true
-    ,
+    val goalMilestonesEnabled: Boolean = true,
+    val udhaarRemindersEnabled: Boolean = true,
     val dailyReminderEnabled: Boolean = false,
     val dailyReminderHour: Int = 20,
     val dailyReminderMinute: Int = 0
@@ -28,8 +30,8 @@ fun loadReminderSettings(context: Context): ReminderSettings {
     return ReminderSettings(
         budgetWarningsEnabled = sharedPrefs.getBoolean(KEY_BUDGET_WARNINGS, true),
         inactivityRemindersEnabled = sharedPrefs.getBoolean(KEY_INACTIVITY_REMINDERS, true),
-        goalMilestonesEnabled = sharedPrefs.getBoolean(KEY_GOAL_MILESTONES, true)
-        ,
+        goalMilestonesEnabled = sharedPrefs.getBoolean(KEY_GOAL_MILESTONES, true),
+        udhaarRemindersEnabled = sharedPrefs.getBoolean(KEY_UDHAAR_REMINDERS, true),
         dailyReminderEnabled = sharedPrefs.getBoolean(KEY_DAILY_REMINDER_ENABLED, false),
         dailyReminderHour = sharedPrefs.getInt(KEY_DAILY_REMINDER_HOUR, 20),
         dailyReminderMinute = sharedPrefs.getInt(KEY_DAILY_REMINDER_MINUTE, 0)
@@ -41,9 +43,10 @@ fun saveReminderSettings(context: Context, settings: ReminderSettings) {
         .putBoolean(KEY_BUDGET_WARNINGS, settings.budgetWarningsEnabled)
         .putBoolean(KEY_INACTIVITY_REMINDERS, settings.inactivityRemindersEnabled)
         .putBoolean(KEY_GOAL_MILESTONES, settings.goalMilestonesEnabled)
-    .putBoolean(KEY_DAILY_REMINDER_ENABLED, settings.dailyReminderEnabled)
-    .putInt(KEY_DAILY_REMINDER_HOUR, settings.dailyReminderHour)
-    .putInt(KEY_DAILY_REMINDER_MINUTE, settings.dailyReminderMinute)
+        .putBoolean(KEY_UDHAAR_REMINDERS, settings.udhaarRemindersEnabled)
+        .putBoolean(KEY_DAILY_REMINDER_ENABLED, settings.dailyReminderEnabled)
+        .putInt(KEY_DAILY_REMINDER_HOUR, settings.dailyReminderHour)
+        .putInt(KEY_DAILY_REMINDER_MINUTE, settings.dailyReminderMinute)
         .apply()
 }
 
@@ -61,4 +64,17 @@ fun loadMilestoneState(context: Context, goalId: String): Int {
 
 fun saveMilestoneState(context: Context, goalId: String, pct: Int) {
     prefs(context).edit().putInt(KEY_GOAL_MILESTONE_PREFIX + goalId, pct).apply()
+}
+
+/**
+ * Last date ("yyyy-MM-dd") we nudged about a person's outstanding balance, so the
+ * 24h worker doesn't re-send the same "Ramesh still owes you" every single day.
+ * Empty string = never nudged.
+ */
+fun loadUdhaarNudgeDate(context: Context, personId: String): String {
+    return prefs(context).getString(KEY_UDHAAR_NUDGE_PREFIX + personId, "") ?: ""
+}
+
+fun saveUdhaarNudgeDate(context: Context, personId: String, date: String) {
+    prefs(context).edit().putString(KEY_UDHAAR_NUDGE_PREFIX + personId, date).apply()
 }

@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -75,7 +76,6 @@ import com.khaata.app.util.CategoryMeta
 import com.khaata.app.util.categoryMeta
 import com.khaata.app.util.evaluateExpression
 import com.khaata.app.util.formatINR
-import com.khaata.app.util.isMoneyInputAllowed
 import com.khaata.app.util.isMoneyOrExprInputAllowed
 import com.khaata.app.util.looksLikeExpression
 import com.khaata.app.util.moneyToInput
@@ -90,6 +90,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     val viewedMonthKey by viewModel.viewedMonthKey.collectAsState()
     val categories by viewModel.categories.collectAsState()
     val templates by viewModel.templates.collectAsState()
+    val people by viewModel.people.collectAsState()
 
     var incomeDraft by remember(monthSummary.income, viewedMonthKey) { mutableStateOf(moneyToInput(monthSummary.income)) }
     var incomeError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
@@ -109,6 +110,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     // form as a template" dialog.
     var templateToDelete by remember { mutableStateOf<Template?>(null) }
     var showSaveTemplate by remember { mutableStateOf(false) }
+    var showSplit by remember { mutableStateOf(false) }
 
     LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -119,21 +121,37 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                     FlowRow(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = incomeDraft,
-                            onValueChange = { if (isMoneyInputAllowed(it)) { incomeDraft = it; incomeError = null } },
+                            onValueChange = { if (isMoneyOrExprInputAllowed(it)) { incomeDraft = it; incomeError = null } },
                             placeholder = { Text("0") },
                             modifier = Modifier.width(150.dp),
                             singleLine = true,
                             isError = incomeError != null,
-                            supportingText = incomeError?.let { { Text(it, color = Rust, fontSize = 11.sp) } },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                            supportingText = when {
+                                incomeError != null -> { { Text(incomeError!!, color = Rust, fontSize = 11.sp) } }
+                                looksLikeExpression(incomeDraft) -> {
+                                    {
+                                        val preview = evaluateExpression(incomeDraft)
+                                        Text(
+                                            if (preview != null) "= ${formatINR(preview)}" else "Check the expression",
+                                            color = if (preview != null) Green else Rust,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                else -> null
+                            },
+                            // Phone keypad + expression eval, same as the amount field. Since
+                            // this prefills with the current income, a user who receives extra
+                            // money just appends "+500" and hits Update — no mental math.
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
                         )
                         Button(
                             onClick = {
-                                val parsed = incomeDraft.trim().toDoubleOrNull()
+                                val parsed = evaluateExpression(incomeDraft)
                                 when {
                                     incomeDraft.isBlank() -> incomeError = "Enter your income for this month."
-                                    parsed == null || parsed < 0 -> incomeError = "Enter a valid amount."
-                                    else -> { incomeError = null; viewModel.updateIncome(parsed) }
+                                    parsed == null -> incomeError = "Enter a valid amount."
+                                    else -> { incomeError = null; viewModel.updateIncome(parsed); incomeDraft = moneyToInput(parsed) }
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper)
@@ -145,6 +163,11 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                             modifier = Modifier.padding(top = 12.dp)
                         )
                     }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Got extra money? Add it right here — e.g. type \"${moneyToInput(monthSummary.income).ifBlank { "0" }}+500\" and Update.",
+                        color = Muted, fontSize = 11.sp
+                    )
                 }
             }
         }
@@ -263,6 +286,11 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                     Spacer(Modifier.width(4.dp))
                     Text("Save as template", color = Ink, fontSize = 13.sp)
                 }
+                TextButton(onClick = { showSplit = true }) {
+                    Icon(Icons.Filled.CallSplit, contentDescription = null, modifier = Modifier.size(16.dp), tint = Ink)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Split a bill", color = Ink, fontSize = 13.sp)
+                }
             }
         }
         item {
@@ -276,7 +304,12 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
         } else {
             items(expenses, key = { it.id }) { e ->
                 Column {
-                    ExpenseListRow(e, categories, onEdit = { expenseToEdit = e }, onDelete = { expenseToDelete = e })
+                    ExpenseListRow(
+                        e, categories,
+                        onEdit = { expenseToEdit = e },
+                        onDelete = { expenseToDelete = e },
+                        onLogAgain = { viewModel.logAgainToday(e) }
+                    )
                     HorizontalDivider(Modifier, DividerDefaults.Thickness, color = PaperLine)
                 }
             }
@@ -331,6 +364,18 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                 val amt = evaluateExpression(amount)?.takeIf { it > 0.0 }
                 if (amt != null) viewModel.addTemplate(label, category, amt, note.trim())
                 showSaveTemplate = false
+            }
+        )
+    }
+
+    if (showSplit) {
+        SplitExpenseDialog(
+            categories = categories,
+            people = people,
+            onDismiss = { showSplit = false },
+            onSave = { splitDate, parts ->
+                viewModel.saveSplit(splitDate, parts)
+                showSplit = false
             }
         )
     }

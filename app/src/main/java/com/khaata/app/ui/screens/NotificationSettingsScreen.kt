@@ -39,12 +39,10 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
-import com.khaata.app.notifications.TEST_NOTIFICATION_ID
 import com.khaata.app.notifications.loadReminderSettings
 import com.khaata.app.notifications.saveReminderSettings
 import com.khaata.app.notifications.scheduleDailyReminder
 import com.khaata.app.notifications.cancelDailyReminder
-import com.khaata.app.notifications.showReminderNotification
 import com.khaata.app.onboarding.resetAllTutorials
 import com.khaata.app.security.isAppLockEnabled
 import com.khaata.app.security.setAppLockEnabled
@@ -89,7 +87,7 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
     }
 
     val anyNotificationOn = settings.budgetWarningsEnabled || settings.inactivityRemindersEnabled ||
-        settings.goalMilestonesEnabled || settings.dailyReminderEnabled
+        settings.goalMilestonesEnabled || settings.udhaarRemindersEnabled || settings.dailyReminderEnabled
 
     LaunchedEffect(settings) {
         saveReminderSettings(context, settings)
@@ -187,6 +185,12 @@ fun NotificationSettingsScreen(viewModel: FinanceViewModel, onBack: () -> Unit) 
             subtitle = "Celebrate 25%, 50%, 75% and 100% progress toward a goal",
             checked = settings.goalMilestonesEnabled,
             onCheckedChange = { settings = settings.copy(goalMilestonesEnabled = it) }
+        )
+        SettingCard(
+            title = "Udhaar reminders",
+            subtitle = "Nudge when money lent or borrowed has been sitting unsettled for a couple of weeks",
+            checked = settings.udhaarRemindersEnabled,
+            onCheckedChange = { settings = settings.copy(udhaarRemindersEnabled = it) }
         )
 
         // Daily logging reminder

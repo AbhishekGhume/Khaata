@@ -101,13 +101,65 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     private val _allExpensesLoading = MutableStateFlow(false)
     val allExpensesLoading: StateFlow<Boolean> = _allExpensesLoading
 
+    /**
+     * The "new month — carry last month's setup forward?" offer. Non-null when the
+     * current calendar month has no income and no budgets yet, last month had at
+     * least one of the two, and the offer hasn't been applied/dismissed before
+     * (tracked on the month doc, so it survives reinstalls). Shown once on the
+     * Dashboard at the start of each month.
+     */
+    data class RolloverOffer(val sourceMonthKey: String, val budgetCount: Int, val income: Double)
+
+    private val _rolloverOffer = MutableStateFlow<RolloverOffer?>(null)
+    val rolloverOffer: StateFlow<RolloverOffer?> = _rolloverOffer
+
     init {
         // Seed built-in categories once, then auto-post any recurring templates due
         // for the actual current calendar month. Both are idempotent.
         viewModelScope.launch {
             runCatching { repository.ensureCategoriesSeeded() }
             runCatching { repository.postDueRecurring(currentMonthKey()) }
+            runCatching { computeRolloverOffer() }
         }
+    }
+
+    private suspend fun computeRolloverOffer() {
+        val current = currentMonthKey()
+        val previous = shiftMonth(current, -1)
+        val (income, handled) = repository.loadMonthMeta(current)
+        if (handled || income > 0.0) return
+        if (repository.countBudgets(current) > 0) return
+        val (prevIncome, _) = repository.loadMonthMeta(previous)
+        val prevBudgets = repository.countBudgets(previous)
+        if (prevBudgets == 0 && prevIncome <= 0.0) return
+        _rolloverOffer.value = RolloverOffer(previous, prevBudgets, prevIncome)
+    }
+
+    /** Applies the rollover: copies last month's budget caps and income into this month. */
+    fun applyRollover() = viewModelScope.launch {
+        val offer = _rolloverOffer.value ?: return@launch
+        _rolloverOffer.value = null
+        val target = currentMonthKey()
+        runCatching {
+            val copied = repository.copyBudgets(offer.sourceMonthKey, target)
+            if (offer.income > 0.0) repository.setIncome(target, offer.income)
+            repository.markRolloverHandled(target)
+            copied
+        }
+            .onSuccess { copied ->
+                val parts = buildList {
+                    if (copied > 0) add("$copied budget${if (copied == 1) "" else "s"}")
+                    if (offer.income > 0.0) add("income")
+                }
+                postMessage("Carried over ${parts.joinToString(" and ")} from last month.")
+            }
+            .onFailure { postMessage("Couldn't carry last month's setup over.") }
+    }
+
+    /** Dismisses the rollover offer for good (for this month). */
+    fun dismissRollover() = viewModelScope.launch {
+        _rolloverOffer.value = null
+        runCatching { repository.markRolloverHandled(currentMonthKey()) }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -168,6 +220,68 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
                 }
             }
             .onFailure { postMessage("Couldn't delete the entry.") }
+    }
+
+    /**
+     * Re-logs an existing entry with today's date — "same chai, again". A one-tap
+     * shortcut for daily repeated spends that aren't worth a saved template.
+     */
+    fun logAgainToday(expense: Expense) = viewModelScope.launch {
+        val today = todayStr()
+        runCatching {
+            repository.addExpense(
+                monthKeyFromDate(today),
+                Expense(category = expense.category, amount = expense.amount, note = expense.note, date = today)
+            )
+        }
+            .onSuccess { postMessage("Logged again for today · ₹${"%,.0f".format(expense.amount)}.") }
+            .onFailure { postMessage("Couldn't log the entry again — nothing was saved.") }
+    }
+
+    /**
+     * One part of a split payment. Exactly one of [categoryKey] / [personId] is set:
+     *  - [categoryKey] → books an expense in that category (your own share).
+     *  - [personId] → books a positive udhaar entry (you paid, so they owe you).
+     */
+    data class SplitPart(
+        val categoryKey: String? = null,
+        val personId: String? = null,
+        val amount: Double = 0.0,
+        val note: String = ""
+    )
+
+    /**
+     * Saves a bill split into its parts: category parts become expenses, contact
+     * parts become "they owe you" udhaar entries. Writes are independent (each is its
+     * own atomic batch, matching how single entries are stored) — not one transaction —
+     * so the message notes partial-failure rather than pretending all-or-nothing.
+     */
+    fun saveSplit(date: String, parts: List<SplitPart>) = viewModelScope.launch {
+        val valid = parts.filter { it.amount > 0.0 && (it.categoryKey != null || it.personId != null) }
+        if (valid.isEmpty()) return@launch
+        runCatching {
+            valid.forEach { part ->
+                when {
+                    part.categoryKey != null ->
+                        repository.addExpense(
+                            monthKeyFromDate(date),
+                            Expense(category = part.categoryKey, amount = part.amount, note = part.note, date = date)
+                        )
+                    part.personId != null ->
+                        repository.recordLedgerEntry(part.personId, part.amount, part.note.ifBlank { "Split bill" }, date)
+                }
+            }
+        }
+            .onSuccess {
+                val expenseParts = valid.count { it.categoryKey != null }
+                val udhaarParts = valid.count { it.personId != null }
+                val bits = buildList {
+                    if (expenseParts > 0) add("$expenseParts expense${if (expenseParts == 1) "" else "s"}")
+                    if (udhaarParts > 0) add("$udhaarParts udhaar entr${if (udhaarParts == 1) "y" else "ies"}")
+                }
+                postMessage("Split saved · ${bits.joinToString(" + ")}.")
+            }
+            .onFailure { postMessage("Couldn't save the whole split — some parts may not have been recorded.") }
     }
 
     fun addGoal(name: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {

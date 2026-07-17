@@ -242,7 +242,16 @@ fun SearchScreen(viewModel: FinanceViewModel) {
         } else {
             items(filtered, key = { it.id }) { e ->
                 Column {
-                    ExpenseListRow(e, categories, onEdit = { expenseToEdit = e }, onDelete = { expenseToDelete = e }, showFullDate = true)
+                    ExpenseListRow(
+                        e, categories,
+                        onEdit = { expenseToEdit = e },
+                        onDelete = { expenseToDelete = e },
+                        showFullDate = true,
+                        onLogAgain = {
+                            val job = viewModel.logAgainToday(e)
+                            scope.launch { job.join(); viewModel.refreshAllExpenses() }
+                        }
+                    )
                     HorizontalDivider(Modifier, DividerDefaults.Thickness, color = PaperLine)
                 }
             }

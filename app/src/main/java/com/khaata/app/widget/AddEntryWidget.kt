@@ -30,6 +30,7 @@ import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.khaata.app.notifications.EXTRA_QUICK_ADD_CATEGORY
+import com.khaata.app.util.CategoryMeta
 
 /**
  * Home-screen quick-add widget: a "Khaata ／ ＋ Add" header over a row of category
@@ -37,21 +38,26 @@ import com.khaata.app.notifications.EXTRA_QUICK_ADD_CATEGORY
  * category, each chip with its category preselected — so an expense is logged in a
  * couple of taps without loading the full app.
  *
+ * The chips are the user's own categories (renames, recolors and custom additions
+ * included), read from [CategoryCache] — a widget can't hold a Firestore listener,
+ * so the app mirrors the live list there and triggers a widget refresh on change.
+ *
  * Drawn in Compose via Glance — no XML UI layout, in keeping with the app.
  */
 class AddEntryWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        provideContent { WidgetContent() }
+        val shortcuts = shortcutCategories(CategoryCache.load(context))
+        provideContent { WidgetContent(shortcuts) }
     }
 
-    /** Short chip labels + category key routed into the quick-add popup. */
-    private val shortcuts = listOf(
-        "Food" to "food",
-        "Transport" to "transport",
-        "Bills" to "bills",
-        "Shopping" to "shopping",
-    )
+    /**
+     * First few categories in the user's own ordering, skipping the "other"
+     * fallback — a chip that preselects "Other" saves no taps over "＋ Add".
+     * Capped at 4 so the chips stay tappable in a single row.
+     */
+    private fun shortcutCategories(categories: List<CategoryMeta>): List<CategoryMeta> =
+        categories.filter { it.key != "other" }.ifEmpty { categories }.take(4)
 
     private fun quickAddIntent(context: Context, category: String?): Intent =
         Intent(context, QuickAddActivity::class.java).apply {
@@ -59,7 +65,7 @@ class AddEntryWidget : GlanceAppWidget() {
         }
 
     @Composable
-    private fun WidgetContent() {
+    private fun WidgetContent(shortcuts: List<CategoryMeta>) {
         val context = LocalContext.current
 
         Column(
@@ -100,24 +106,26 @@ class AddEntryWidget : GlanceAppWidget() {
 
             Spacer(GlanceModifier.height(10.dp))
 
-            // Category shortcut chips — each preselects its category in the popup.
+            // Category shortcut chips — each preselects its category in the popup,
+            // tinted with the category's own color like the in-app chips.
             Row(modifier = GlanceModifier.fillMaxWidth()) {
-                shortcuts.forEachIndexed { index, (label, key) ->
+                shortcuts.forEachIndexed { index, meta ->
                     if (index > 0) Spacer(GlanceModifier.width(6.dp))
                     Text(
-                        text = label,
+                        text = meta.label,
+                        maxLines = 1,
                         style = TextStyle(
-                            color = ColorProvider(Color(0xFFF3E9D2)),
+                            color = ColorProvider(Color.White),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             textAlign = TextAlign.Center
                         ),
                         modifier = GlanceModifier
                             .defaultWeight()
-                            .background(Color(0x33FFFFFF))
+                            .background(meta.color)
                             .cornerRadius(12.dp)
-                            .padding(vertical = 8.dp)
-                            .clickable(actionStartActivity(quickAddIntent(context, key)))
+                            .padding(vertical = 8.dp, horizontal = 4.dp)
+                            .clickable(actionStartActivity(quickAddIntent(context, meta.key)))
                     )
                 }
             }

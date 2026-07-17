@@ -54,7 +54,9 @@ class ReminderWorker(
             } else {
                 "${top.category} is over its monthly budget."
             }
-            showReminderNotification(applicationContext, BUDGET_WARNING_NOTIFICATION_ID, "Budget warning", message)
+            // A budget warning is informational — there's nothing to log, so no
+            // "Quick add" action; tapping it lands on the Budgets tab instead.
+            showAlertNotification(applicationContext, BUDGET_WARNING_NOTIFICATION_ID, "Budget warning", message, openTab = "budgets")
         }
 
         // Only nag about inactivity once there's a real logging history to be
@@ -85,16 +87,64 @@ class ReminderWorker(
                     val alreadyHit = loadMilestoneState(applicationContext, goal.id)
                     if (currentPct >= milestone && alreadyHit < milestone) {
                         saveMilestoneState(applicationContext, goal.id, milestone)
-                        showMilestoneNotification(
+                        showAlertNotification(
                             applicationContext,
                             2000 + milestone + goal.id.hashCode().absoluteValue % 1000,
                             "Goal unlocked",
-                            "${goal.name} just hit ${milestoneLabel(milestone)}. Keep going."
+                            "${goal.name} just hit ${milestoneLabel(milestone)}. Keep going.",
+                            openTab = "goals",
+                            highPriority = true
                         )
                     }
                 }
         }
 
+        // ── Udhaar nudges ─────────────────────────────────────────────────
+        // A gentle "this has been sitting for a while" for long-outstanding
+        // balances (either direction). Nudges when the last ledger movement is
+        // ≥ UDHAAR_STALE_DAYS old, then at most once every UDHAAR_RENUDGE_DAYS
+        // per person after that — a nudge, not a daily nag.
+        if (settings.udhaarRemindersEnabled) {
+            val today = LocalDate.now()
+            repository.loadPeopleOnce()
+                .filter { it.balance.absoluteValue >= 1.0 }
+                .forEach { person ->
+                    val lastMovement = repository.lastLedgerDate(person.id) ?: return@forEach
+                    val staleDays = runCatching {
+                        java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(lastMovement), today).toInt()
+                    }.getOrNull() ?: return@forEach
+                    if (staleDays < UDHAAR_STALE_DAYS) return@forEach
+
+                    val lastNudge = loadUdhaarNudgeDate(applicationContext, person.id)
+                    val daysSinceNudge = runCatching {
+                        java.time.temporal.ChronoUnit.DAYS.between(LocalDate.parse(lastNudge), today).toInt()
+                    }.getOrDefault(Int.MAX_VALUE)
+                    if (daysSinceNudge < UDHAAR_RENUDGE_DAYS) return@forEach
+
+                    val amountStr = "₹${"%,.0f".format(person.balance.absoluteValue)}"
+                    val message = if (person.balance > 0) {
+                        "${person.name} has owed you $amountStr for $staleDays days."
+                    } else {
+                        "You've owed ${person.name} $amountStr for $staleDays days."
+                    }
+                    saveUdhaarNudgeDate(applicationContext, person.id, today.toString())
+                    showAlertNotification(
+                        applicationContext,
+                        3000 + person.id.hashCode().absoluteValue % 1000,
+                        "Udhaar reminder",
+                        message,
+                        openTab = "people"
+                    )
+                }
+        }
+
         return Result.success()
+    }
+
+    companion object {
+        /** Days a balance must sit unchanged before the first nudge. */
+        const val UDHAAR_STALE_DAYS = 14
+        /** Minimum days between nudges for the same person. */
+        const val UDHAAR_RENUDGE_DAYS = 7
     }
 }

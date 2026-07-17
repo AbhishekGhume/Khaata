@@ -82,9 +82,11 @@ app/src/main/java/com/khaata/app/
     HistoryScreen.kt           Every past month, tap to jump the Dashboard there
     NotificationSettingsScreen.kt   Toggle and time-pick the daily expense-log reminder
   widget/
-    AddEntryWidget.kt          Glance home-screen widget: "＋ Add" button + category
-                                shortcut chips (Food/Transport/Bills/Shopping)
+    AddEntryWidget.kt          Glance home-screen widget: "＋ Add" button + shortcut
+                                chips for the user's own categories
     AddEntryWidgetReceiver.kt  GlanceAppWidgetReceiver binding
+    CategoryCache.kt           Device-local mirror of the category list for the widget
+                                and quick-add popup (no Firestore listener out there)
     QuickAddActivity.kt        Transparent quick-add popup that writes one expense
                                 straight to Firestore without loading the full app
   onboarding/
@@ -183,10 +185,14 @@ just posts one offsetting `-balance` entry.
   account). Files are shared via `FileProvider` and the system share sheet; CSV
   cells are escaped against spreadsheet formula injection.
 - **Home-screen widget + quick add** — a Glance widget with a "＋ Add" button and
-  Food/Transport/Bills/Shopping shortcut chips. Every tap opens `QuickAddActivity`,
+  shortcut chips for the user's own first few categories (custom names, colors and
+  ordering included — mirrored device-locally via `CategoryCache`, since a widget
+  can't hold a Firestore listener). Every tap opens `QuickAddActivity`,
   a transparent popup (chips arrive with their category preselected) that logs one
   expense straight to Firestore without loading the full app. The daily reminder
-  notification carries the same "Quick add" action. The popup deliberately bypasses
+  and inactivity notifications carry the same "Quick add" action; informational
+  alerts (budget warning, goal milestone) don't — they open the Budgets/Goals tab
+  instead, since there's nothing to log. The popup deliberately bypasses
   the app lock — adding an expense reveals no ledger data — while *viewing* anything
   still goes through the gate; if no one is signed in it falls back to opening the
   app's sign-in.
@@ -218,7 +224,9 @@ overlays with their own in-app back stack (no nav library).
   `FirebaseUser.sendEmailVerification()` / checking `isEmailVerified` is the natural
   next step if you want to confirm addresses are real.
 - **No multi-currency.** Amounts are stored as plain `Double`, formatted as ₹.
-- **The widget's shortcut chips are fixed** (Food/Transport/Bills/Shopping) rather
-  than user-configurable or driven by the custom category list.
+- **The widget's chips refresh only while the app runs** — the category mirror
+  (`CategoryCache`) is written from the app's live categories flow, so a category
+  edit shows up on the widget the next time the list emits with the app open (in
+  practice: immediately, since edits happen in the app).
 - **Restore is overwrite-by-id, not a merge** — it's meant for rebuilding an empty
   account from a backup, not for reconciling two live datasets.

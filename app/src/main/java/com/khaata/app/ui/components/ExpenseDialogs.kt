@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -174,7 +175,11 @@ fun DeleteExpenseDialog(
     )
 }
 
-/** A ledger-style expense row with edit + delete affordances. Shared by AddEntry & Search. */
+/**
+ * A ledger-style expense row with edit + delete affordances. Shared by AddEntry &
+ * Search. [onLogAgain], when provided, adds a "log this again today" repeat icon —
+ * for daily repeated spends that aren't worth a saved template.
+ */
 @Composable
 fun ExpenseListRow(
     expense: Expense,
@@ -182,6 +187,7 @@ fun ExpenseListRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     showFullDate: Boolean = false,
+    onLogAgain: (() -> Unit)? = null,
 ) {
     val meta = categoryMeta(expense.category, categories)
     Row(
@@ -198,6 +204,11 @@ fun ExpenseListRow(
         Text(meta.label, fontSize = 13.sp, modifier = Modifier.width(110.dp))
         Text(expense.note, fontSize = 12.sp, color = Muted, modifier = Modifier.width(0.dp).weight(1f), maxLines = 1)
         Text(formatINR(expense.amount), fontFamily = FontFamily.Monospace, fontSize = 13.sp, modifier = Modifier.width(80.dp), textAlign = TextAlign.End)
+        if (onLogAgain != null) {
+            IconButton(onClick = onLogAgain) {
+                Icon(Icons.Filled.Repeat, contentDescription = "Log again today", tint = Green, modifier = Modifier.size(17.dp))
+            }
+        }
         IconButton(onClick = onEdit) {
             Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = Muted, modifier = Modifier.size(17.dp))
         }

@@ -18,16 +18,25 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import com.google.firebase.auth.FirebaseAuth
 import com.khaata.app.MainActivity
 import com.khaata.app.data.model.Expense
+import com.khaata.app.data.model.Template
 import com.khaata.app.data.model.monthKeyFromDate
 import com.khaata.app.data.model.todayStr
 import com.khaata.app.data.repository.FinanceRepository
@@ -61,11 +71,15 @@ import com.khaata.app.ui.theme.Paper
 import com.khaata.app.ui.theme.PaperCard
 import com.khaata.app.ui.theme.PaperLine
 import com.khaata.app.ui.theme.Rust
-import com.khaata.app.util.DEFAULT_CATEGORIES
+import com.khaata.app.util.CategoryMeta
 import com.khaata.app.util.evaluateExpression
 import com.khaata.app.util.formatINR
 import com.khaata.app.util.isMoneyOrExprInputAllowed
 import com.khaata.app.util.looksLikeExpression
+import com.khaata.app.util.moneyToInput
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -105,21 +119,28 @@ class QuickAddActivity : ComponentActivity() {
         }
 
         val repository = FinanceRepository(uid)
+        // The user's own categories + quick-add templates, mirrored device-locally by
+        // the app (see CategoryCache / TemplateCache) — so renames/additions show up
+        // here without a Firestore read.
+        val categories = CategoryCache.load(this)
+        val templates = TemplateCache.load(this)
         val presetCategory = intent?.getStringExtra(EXTRA_QUICK_ADD_CATEGORY)
-            ?.takeIf { key -> DEFAULT_CATEGORIES.any { it.key == key } }
-            ?: "food"
+            ?.takeIf { key -> categories.any { it.key == key } }
+            ?: categories.first().key
 
         setContent {
             QuickAddDialog(
+                categories = categories,
+                templates = templates,
                 presetCategory = presetCategory,
                 onDismiss = { finish() },
-                onSave = { category, amount, note ->
+                onSave = { category, amount, note, date ->
                     // App-scoped so it outlives this Activity's finish().
                     quickAddScope.launch {
                         runCatching {
                             repository.addExpense(
-                                monthKeyFromDate(todayStr()),
-                                Expense(category = category, amount = amount, note = note, date = todayStr())
+                                monthKeyFromDate(date),
+                                Expense(category = category, amount = amount, note = note, date = date)
                             )
                         }
                     }
@@ -139,13 +160,16 @@ class QuickAddActivity : ComponentActivity() {
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun QuickAddDialog(
+    categories: List<CategoryMeta>,
+    templates: List<Template>,
     presetCategory: String,
     onDismiss: () -> Unit,
-    onSave: (category: String, amount: Double, note: String) -> Unit,
+    onSave: (category: String, amount: Double, note: String, date: String) -> Unit,
 ) {
     var category by remember { mutableStateOf(presetCategory) }
     var amount by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var date by remember { mutableStateOf(todayStr()) }
     var error by remember { mutableStateOf<String?>(null) }
 
     val focusRequester = remember { FocusRequester() }
@@ -159,7 +183,7 @@ private fun QuickAddDialog(
         when {
             amount.isBlank() -> error = "Enter an amount."
             value == null || value <= 0.0 -> error = "Enter a valid amount."
-            else -> onSave(category, value, note.trim())
+            else -> onSave(category, value, note.trim(), date)
         }
     }
 
@@ -176,7 +200,7 @@ private fun QuickAddDialog(
             shadowElevation = 8.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(Modifier.padding(18.dp)) {
+            Column(Modifier.padding(18.dp).verticalScroll(rememberScrollState())) {
                 // Header
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -197,6 +221,45 @@ private fun QuickAddDialog(
                 }
                 Spacer(Modifier.height(14.dp))
 
+                // One-tap template chips — tap fills the whole form, then Save is one
+                // more tap. Same templates the Add Entry screen shows.
+                if (templates.isNotEmpty()) {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        templates.forEach { t ->
+                            val meta = categories.firstOrNull { it.key == t.category }
+                            Surface(
+                                color = Paper,
+                                border = BorderStroke(1.dp, PaperLine),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.clickable {
+                                    category = t.category.takeIf { key -> categories.any { it.key == key } } ?: category
+                                    amount = moneyToInput(t.amount)
+                                    note = t.note
+                                    error = null
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (meta != null) {
+                                        Box(Modifier.size(8.dp).background(meta.color, CircleShape))
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(t.label.ifBlank { meta?.label ?: t.category }, fontSize = 12.sp, color = Ink)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(formatINR(t.amount), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Muted)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+
                 // Amount
                 OutlinedTextField(
                     value = amount,
@@ -212,7 +275,9 @@ private fun QuickAddDialog(
                                 Text("= ${formatINR(resolved)}", color = Green, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                         }
                     },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                    // Phone keypad, same as the in-app entry form: it exposes + − ( ) * /
+                    // so expressions like 340+55 can be typed here too.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Next),
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
@@ -227,7 +292,7 @@ private fun QuickAddDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    DEFAULT_CATEGORIES.forEach { meta ->
+                    categories.forEach { meta ->
                         val selected = meta.key == category
                         Surface(
                             color = if (selected) meta.color else Paper,
@@ -245,6 +310,13 @@ private fun QuickAddDialog(
                         }
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+
+                // Date — defaults to today; "Yesterday" covers the forgot-to-log-dinner
+                // case, and the calendar chip handles anything older.
+                Text("Date", fontSize = 12.sp, color = Muted, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                QuickDateRow(date = date, onDateChange = { date = it })
                 Spacer(Modifier.height(12.dp))
 
                 // Note
@@ -271,12 +343,82 @@ private fun QuickAddDialog(
                 }
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "Saved to today · ${todayStr()}",
+                    "Saving to $date",
                     fontSize = 11.sp,
                     color = Muted,
                     modifier = Modifier.padding(top = 6.dp).align(Alignment.CenterHorizontally)
                 )
             }
         }
+    }
+}
+
+/**
+ * Today / Yesterday chips plus a calendar chip for anything older. Selected chip is
+ * filled Ink; a custom-picked date shows on the calendar chip itself.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuickDateRow(date: String, onDateChange: (String) -> Unit) {
+    val today = todayStr()
+    val yesterday = remember { LocalDate.now().minusDays(1).toString() }
+    var showPicker by remember { mutableStateOf(false) }
+    val isCustom = date != today && date != yesterday
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        DateChip("Today", selected = date == today) { onDateChange(today) }
+        DateChip("Yesterday", selected = date == yesterday) { onDateChange(yesterday) }
+        DateChip(if (isCustom) date else "Pick…", selected = isCustom) { showPicker = true }
+    }
+
+    if (showPicker) {
+        val initialMillis = runCatching {
+            LocalDate.parse(date).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        }.getOrNull()
+        // Expenses can only have happened already — cap selection at today (UTC,
+        // matching the picker's own UTC-based millis), same as DatePickerField.
+        val todayEndMillis = remember {
+            LocalDate.now(ZoneOffset.UTC).plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() - 1
+        }
+        val todayYear = remember { LocalDate.now(ZoneOffset.UTC).year }
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = initialMillis,
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= todayEndMillis
+                override fun isSelectableYear(year: Int) = year <= todayYear
+            }
+        )
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { millis ->
+                        onDateChange(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().toString())
+                    }
+                    showPicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showPicker = false }) { Text("Cancel") } }
+        ) {
+            DatePicker(state = state)
+        }
+    }
+}
+
+@Composable
+private fun DateChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        color = if (selected) Ink else Paper,
+        border = BorderStroke(1.dp, if (selected) Ink else PaperLine),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.clickable(onClick = onClick)
+    ) {
+        Text(
+            label,
+            color = if (selected) Paper else Ink,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+        )
     }
 }

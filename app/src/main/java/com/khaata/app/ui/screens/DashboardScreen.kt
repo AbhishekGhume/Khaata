@@ -16,9 +16,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +75,7 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
     }
 
     val goalStats = remember(goals) { goals.map { it to it.computeStats(currentMonthKey()) } }
+    val rolloverOffer by viewModel.rolloverOffer.collectAsState()
     val totalRequiredMonthly = goalStats.filter { !it.second.achieved }.sumOf { it.second.requiredMonthly }
     val totalContributedThisMonth = goalStats.sumOf { it.second.contributedThisMonth }
 
@@ -94,6 +98,38 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
+        // ── New-month rollover offer ───────────────────────────────────────
+        rolloverOffer?.let { offer ->
+            if (isCurrentMonth) {
+                item {
+                    Surface(color = GreenSoft, shape = RoundedCornerShape(12.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                            Text("New month, fresh page", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Green)
+                            Spacer(Modifier.height(4.dp))
+                            val parts = buildList {
+                                if (offer.budgetCount > 0) add("${offer.budgetCount} budget cap${if (offer.budgetCount == 1) "" else "s"}")
+                                if (offer.income > 0.0) add("income of ${formatINR(offer.income)}")
+                            }
+                            Text(
+                                "Carry over last month's ${parts.joinToString(" and ")} so you don't have to re-enter them?",
+                                fontSize = 13.sp
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { viewModel.applyRollover() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Green)
+                                ) { Text("Carry over") }
+                                TextButton(onClick = { viewModel.dismissRollover() }) {
+                                    Text("Start fresh", color = Muted)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Summary cards ──────────────────────────────────────────────────
         item {
             FlowRow(

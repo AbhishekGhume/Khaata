@@ -21,8 +21,9 @@ import java.util.Calendar
 const val KHAATA_NOTIFICATION_CHANNEL_ID = "khaata_reminders"
 const val BUDGET_WARNING_NOTIFICATION_ID = 1001
 const val INACTIVITY_NOTIFICATION_ID = 1002
-const val TEST_NOTIFICATION_ID = 1099
 const val EXTRA_OPEN_ADD_ENTRY = "com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY"
+// Which tab an alert notification should land on when tapped ("budgets" | "goals").
+const val EXTRA_OPEN_TAB = "com.khaata.app.notifications.EXTRA_OPEN_TAB"
 // Optional preselected category key for the quick-add popup; shared by the widget
 // shortcuts and the notification "Quick add" action.
 const val EXTRA_QUICK_ADD_CATEGORY = "com.khaata.app.notifications.EXTRA_QUICK_ADD_CATEGORY"
@@ -54,6 +55,12 @@ fun ensureNotificationChannel(context: Context) {
     manager.createNotificationChannel(channel)
 }
 
+/**
+ * Reminder to *log something* (daily reminder, inactivity nag). These are the only
+ * notifications that carry the "＋ Quick add" action — the whole point of the
+ * notification is to get an entry added, so we offer the one-tap popup. Tapping
+ * the body opens the app on the Add Entry tab.
+ */
 @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
 fun showReminderNotification(context: Context, id: Int, title: String, body: String) {
     ensureNotificationChannel(context)
@@ -90,15 +97,38 @@ fun showReminderNotification(context: Context, id: Int, title: String, body: Str
     NotificationManagerCompat.from(context).notify(id, notification)
 }
 
+/**
+ * Informational alert (budget warning, goal milestone) — something to *look at*,
+ * not something to log, so deliberately no "Quick add" action. Tapping it opens
+ * the app on [openTab] ("budgets" / "goals"), or just the Dashboard when null.
+ */
 @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
-fun showMilestoneNotification(context: Context, id: Int, title: String, body: String) {
+fun showAlertNotification(
+    context: Context,
+    id: Int,
+    title: String,
+    body: String,
+    openTab: String? = null,
+    highPriority: Boolean = false,
+) {
     ensureNotificationChannel(context)
+    val launchIntent = Intent(context, MainActivity::class.java).apply {
+        if (openTab != null) putExtra(EXTRA_OPEN_TAB, openTab)
+        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    }
+    val contentIntent = PendingIntent.getActivity(
+        context,
+        id,
+        launchIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
     val notification = NotificationCompat.Builder(context, KHAATA_NOTIFICATION_CHANNEL_ID)
         .setSmallIcon(R.mipmap.ic_launcher)
         .setContentTitle(title)
         .setContentText(body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setPriority(if (highPriority) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(contentIntent)
         .setAutoCancel(true)
         .build()
 

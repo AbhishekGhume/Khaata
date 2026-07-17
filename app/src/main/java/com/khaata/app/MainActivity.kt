@@ -98,6 +98,7 @@ import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.repository.FinanceRepository
 import com.khaata.app.notifications.ReminderWorker
 import com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY
+import com.khaata.app.notifications.EXTRA_OPEN_TAB
 import com.khaata.app.notifications.ensureNotificationChannel
 import com.khaata.app.onboarding.OnboardingScreen
 import com.khaata.app.onboarding.hasTutorialBeenSeen
@@ -134,6 +135,10 @@ import com.khaata.app.ui.theme.PaperCard
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.viewmodel.FinanceViewModel
 import com.khaata.app.viewmodel.FinanceViewModelFactory
+import com.khaata.app.widget.AddEntryWidget
+import com.khaata.app.widget.CategoryCache
+import com.khaata.app.widget.TemplateCache
+import androidx.glance.appwidget.updateAll
 import java.util.concurrent.TimeUnit
 
 enum class KhaataTab(val label: String, val icon: ImageVector) {
@@ -155,6 +160,8 @@ private data class NavState(val tab: KhaataTab, val sub: SubScreen?)
 
 class MainActivity : FragmentActivity() {
     private var openEntryTabRequested by mutableStateOf(false)
+    // Tab requested by an alert notification ("budgets" / "goals"), consumed once routed.
+    private var openTabRequested by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -241,6 +248,8 @@ class MainActivity : FragmentActivity() {
                                 viewModel,
                                 openEntryTabRequested = openEntryTabRequested,
                                 onOpenEntryTabHandled = { openEntryTabRequested = false },
+                                openTabRequested = openTabRequested,
+                                onOpenTabHandled = { openTabRequested = null },
                                 onSignOut = {
                                     // The auth listener recomputes `unlocked` from the
                                     // lock preference on sign-out, so no manual reset
@@ -265,6 +274,7 @@ class MainActivity : FragmentActivity() {
         if (intent?.getBooleanExtra(EXTRA_OPEN_ADD_ENTRY, false) == true) {
             openEntryTabRequested = true
         }
+        intent?.getStringExtra(EXTRA_OPEN_TAB)?.let { openTabRequested = it }
     }
 }
 
@@ -284,6 +294,8 @@ fun KhaataApp(
     viewModel: FinanceViewModel,
     openEntryTabRequested: Boolean,
     onOpenEntryTabHandled: () -> Unit,
+    openTabRequested: String?,
+    onOpenTabHandled: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     var activeTab by remember { mutableStateOf(KhaataTab.DASHBOARD) }
@@ -371,6 +383,34 @@ fun KhaataApp(
         if (openEntryTabRequested) {
             navigateTo(KhaataTab.ENTRY)
             onOpenEntryTabHandled()
+        }
+    }
+
+    // Alert notifications (budget warning / goal milestone / udhaar nudge) land on their subject tab.
+    LaunchedEffect(openTabRequested) {
+        when (openTabRequested) {
+            "budgets" -> navigateTo(KhaataTab.BUDGETS)
+            "goals" -> navigateTo(KhaataTab.GOALS)
+            "people" -> navigateTo(KhaataTab.PEOPLE)
+        }
+        if (openTabRequested != null) onOpenTabHandled()
+    }
+
+    // Mirror the live category list into the device-local cache the widget and
+    // quick-add popup read (they can't hold a Firestore listener), refreshing the
+    // widget whenever the list actually changed.
+    LaunchedEffect(Unit) {
+        viewModel.categories.collect { list ->
+            if (CategoryCache.save(context, list)) {
+                AddEntryWidget().updateAll(context)
+            }
+        }
+    }
+
+    // Same for quick-add templates — the popup shows them as one-tap chips.
+    LaunchedEffect(Unit) {
+        viewModel.templates.collect { list ->
+            TemplateCache.save(context, list)
         }
     }
 

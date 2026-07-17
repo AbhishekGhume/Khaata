@@ -192,6 +192,25 @@ class FinanceRepository(private val uid: String) {
 
     suspend fun latestBudgetProgress(monthKey: String): List<BudgetProgress> = loadBudgetProgress(monthKey)
 
+    // ── New-month rollover ──────────────────────────────────────────────────
+    // Backs the "new month — copy last month's setup?" offer on the Dashboard.
+    // `rolloverHandled` lives on the month doc (not device-local prefs) so a
+    // dismissal sticks across devices and reinstalls.
+
+    /** One-shot read of a month's income and whether its rollover offer was already handled. */
+    suspend fun loadMonthMeta(monthKey: String): Pair<Double, Boolean> {
+        val snap = monthsRef().document(monthKey).get().await()
+        return (snap.getDouble("income") ?: 0.0) to (snap.getBoolean("rolloverHandled") ?: false)
+    }
+
+    suspend fun countBudgets(monthKey: String): Int =
+        budgetsRef().whereEqualTo("monthKey", monthKey).get().await().size()
+
+    /** Marks the month's rollover offer as consumed (applied or dismissed). */
+    suspend fun markRolloverHandled(monthKey: String) {
+        monthsRef().document(monthKey).set(mapOf("rolloverHandled" to true), SetOptions.merge()).await()
+    }
+
     suspend fun loadLatestExpenseDate(monthKey: String): String? {
         val snapshot = monthsRef().document(monthKey).collection("expenses")
             .orderBy("date", Query.Direction.DESCENDING)
@@ -611,6 +630,34 @@ class FinanceRepository(private val uid: String) {
                 date = d.getString("date") ?: ""
             )
         }
+    }
+
+    /** One-shot read of everyone in the udhaar ledger — used by the reminder worker. */
+    suspend fun loadPeopleOnce(): List<Person> {
+        return contactsRef().get().await().documents.map { d ->
+            Person(
+                id = d.id,
+                name = d.getString("name") ?: "",
+                note = d.getString("note") ?: "",
+                balance = d.getDouble("balance") ?: 0.0,
+                createdAt = d.getString("createdAt") ?: ""
+            )
+        }
+    }
+
+    /**
+     * The date of a person's most recent ledger entry, or null when the ledger is
+     * empty. "How long has this balance been sitting" is measured from the last
+     * movement, not from the first loan — any partial payment resets the clock,
+     * which is the fair reading of an active ledger.
+     */
+    suspend fun lastLedgerDate(personId: String): String? {
+        val snapshot = contactsRef().document(personId).collection("ledger")
+            .orderBy("date", Query.Direction.DESCENDING)
+            .limit(1)
+            .get()
+            .await()
+        return snapshot.documents.firstOrNull()?.getString("date")
     }
 
     /**
