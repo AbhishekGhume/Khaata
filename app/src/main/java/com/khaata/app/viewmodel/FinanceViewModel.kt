@@ -551,6 +551,25 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
             .onFailure { postMessage("Couldn't delete the category.") }
     }
 
+    /**
+     * Moves a category one place up or down in the manual ordering and persists it.
+     * The live categories flow re-emits in the new order, so every category picker in
+     * the app follows suit. A no-op at the ends of the list.
+     */
+    fun moveCategory(key: String, up: Boolean) = viewModelScope.launch {
+        val current = categories.value
+        val index = current.indexOfFirst { it.key == key }
+        if (index < 0) return@launch
+        val target = if (up) index - 1 else index + 1
+        if (target !in current.indices) return@launch
+        val reordered = current.toMutableList().also {
+            val moved = it.removeAt(index)
+            it.add(target, moved)
+        }
+        runCatching { repository.reorderCategories(reordered.map { c -> c.key }) }
+            .onFailure { postMessage("Couldn't reorder categories.") }
+    }
+
     // ── Recurring expenses ──────────────────────────────────────────────────
 
     fun addRecurring(category: String, amount: Double, note: String, dayOfMonth: Int) = viewModelScope.launch {

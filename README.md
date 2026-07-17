@@ -6,7 +6,7 @@ for udhaar, and analytics — all backed by Firebase Firestore so it persists an
 later sync across devices. Styled deliberately like a physical passbook rather than a
 generic Material demo.
 
-Get the latest apk 👉 https://drive.google.com/file/d/1gJsvNrTzMgQOHy6uH0kZjKnNvgm4dK0p/view?usp=drive_link
+Get the latest apk 👉 https://drive.google.com/drive/folders/1I2oiQE2QTZj9puM4Bvam081MG5xJ3EVU?usp=sharing
 
 ## Stack
 

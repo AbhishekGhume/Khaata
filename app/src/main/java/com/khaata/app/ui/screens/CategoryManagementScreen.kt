@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +26,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -94,6 +96,7 @@ fun CategoryManagementScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
             item {
                 Text(
                     "Add your own categories or rename, recolor, and re-icon any category. " +
+                        "Use the arrows to set the order they appear in everywhere (Add Entry, budgets, split). " +
                         "Deleting one reassigns its past entries and any recurring expenses to \"Other\".",
                     color = Muted, fontSize = 13.sp
                 )
@@ -108,12 +111,36 @@ fun CategoryManagementScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
                     Text("New category")
                 }
             }
-            items(categories, key = { it.key }) { cat ->
+            itemsIndexed(categories, key = { _, it -> it.key }) { index, cat ->
                 Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Reorder arrows — disabled at the ends of the list.
+                        Column {
+                            IconButton(
+                                onClick = { viewModel.moveCategory(cat.key, up = true) },
+                                enabled = index > 0,
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.KeyboardArrowUp, contentDescription = "Move up",
+                                    tint = if (index > 0) Ink else PaperLine, modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { viewModel.moveCategory(cat.key, up = false) },
+                                enabled = index < categories.lastIndex,
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.KeyboardArrowDown, contentDescription = "Move down",
+                                    tint = if (index < categories.lastIndex) Ink else PaperLine, modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
                         Box(
                             Modifier.size(34.dp).background(cat.color, CircleShape),
                             contentAlignment = Alignment.Center

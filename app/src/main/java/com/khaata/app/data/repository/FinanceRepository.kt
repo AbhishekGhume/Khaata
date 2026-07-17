@@ -744,6 +744,20 @@ class FinanceRepository(private val uid: String) {
     }
 
     /**
+     * Persists a new manual ordering of categories. Each category's `order` is set to
+     * its index in [orderedKeys], in one batch, so `observeCategories` (which sorts by
+     * `order`) re-emits in exactly this sequence everywhere the list is shown — Add
+     * Entry, budgets, the split dialog, the quick-add popup, all of it.
+     */
+    suspend fun reorderCategories(orderedKeys: List<String>) {
+        val batch = db.batch()
+        orderedKeys.forEachIndexed { index, key ->
+            batch.update(categoriesRef().document(key), "order", index)
+        }
+        batch.commit().await()
+    }
+
+    /**
      * Deletes a category and cleans up everything keyed to it, so nothing dangles
      * under a category that no longer exists:
      *

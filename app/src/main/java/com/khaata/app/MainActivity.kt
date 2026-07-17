@@ -959,7 +959,7 @@ private fun tutorialIdFor(tab: KhaataTab): String? = when (tab) {
     KhaataTab.BUDGETS   -> TutorialContent.BUDGETS
     KhaataTab.ENTRY     -> TutorialContent.ADD_ENTRY
     KhaataTab.GOALS     -> TutorialContent.GOALS
-    KhaataTab.PEOPLE    -> null
-    KhaataTab.SEARCH    -> null
+    KhaataTab.PEOPLE    -> TutorialContent.PEOPLE
+    KhaataTab.SEARCH    -> TutorialContent.SEARCH
     KhaataTab.HISTORY   -> TutorialContent.HISTORY
 }

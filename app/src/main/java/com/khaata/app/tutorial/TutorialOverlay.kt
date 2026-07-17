@@ -21,11 +21,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ListAlt
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -160,19 +171,24 @@ fun TutorialOverlay(
  * screenId used with [com.khaata.app.onboarding.hasTutorialBeenSeen].
  */
 object TutorialContent {
-    const val DASHBOARD = "dashboard"
-    const val BUDGETS = "budgets"
-    const val GOALS = "goals"
-    const val ADD_ENTRY = "add_entry"
-    const val ANALYTICS = "analytics"
-    const val HISTORY = "history"
+    // Version suffix bumped when the copy is refreshed for new features, so the
+    // updated tips surface once even to users who saw the older set. The "seen"
+    // flag is keyed by these exact strings.
+    const val DASHBOARD = "dashboard_v2"
+    const val BUDGETS = "budgets_v2"
+    const val GOALS = "goals_v2"
+    const val ADD_ENTRY = "add_entry_v2"
+    const val ANALYTICS = "analytics_v2"
+    const val HISTORY = "history_v2"
+    const val PEOPLE = "people_v1"
+    const val SEARCH = "search_v1"
 
     fun stepsFor(screenId: String): List<TutorialStep> = when (screenId) {
         DASHBOARD -> listOf(
             TutorialStep(
                 Icons.Filled.Home,
                 "This is your Dashboard",
-                "A live snapshot of this month: income, kharcha (spend), net savings, and how your budgets are tracking \u2014 all in one glance."
+                "A live snapshot of the month: income, kharcha (spend), net savings, and how every budget and goal is tracking \u2014 all in one glance."
             ),
             TutorialStep(
                 Icons.Filled.ShowChart,
@@ -180,9 +196,9 @@ object TutorialContent {
                 "Green means on track, gold means watch closely, rust/red means you're over a budget or behind a goal \u2014 no need to read every number."
             ),
             TutorialStep(
-                Icons.Filled.Flag,
-                "Goals show up here too",
-                "Once you add a savings goal, this screen tells you exactly how much more you need to save this month to stay on pace."
+                Icons.Filled.Autorenew,
+                "New month, fresh page",
+                "At the start of a month, Khaata offers to carry over last month's budget caps and income so you don't re-enter them. Tap \u201cCarry over\u201d or start fresh."
             ),
         )
         BUDGETS -> listOf(
@@ -196,6 +212,11 @@ object TutorialContent {
                 "Runway warnings",
                 "If you're spending fast enough that a budget will run out before month-end, Khaata flags it early \u2014 not after it's already happened."
             ),
+            TutorialStep(
+                Icons.Filled.ContentCopy,
+                "Reuse last month",
+                "\u201cCopy last month's budgets\u201d sets this month's caps to match the previous one in a tap \u2014 handy when your limits rarely change."
+            ),
         )
         GOALS -> listOf(
             TutorialStep(
@@ -206,7 +227,7 @@ object TutorialContent {
             TutorialStep(
                 Icons.Filled.ShowChart,
                 "Log contributions anytime",
-                "Every time you set money aside for a goal, log it here \u2014 your pace and status update instantly."
+                "Every time you set money aside, log it here. Your pace, percentage, and \u201con track / behind\u201d status update instantly, and milestones can notify you."
             ),
         )
         ADD_ENTRY -> listOf(
@@ -215,12 +236,61 @@ object TutorialContent {
                 "Logging an expense takes seconds",
                 "Pick a category, type the amount, add an optional note, and save. The date defaults to today but you can backdate it."
             ),
+            TutorialStep(
+                Icons.Filled.Calculate,
+                "The amount is a calculator",
+                "Type an expression like 340+55+12 and Khaata adds it up for you \u2014 same for income (append \u201c+500\u201d to the current figure when extra money comes in)."
+            ),
+            TutorialStep(
+                Icons.Filled.StarBorder,
+                "Templates & log again",
+                "Save a frequent expense as a one-tap template chip (it shows up in the home-screen popup too). Or hit the repeat icon on any past entry to log it again today."
+            ),
+            TutorialStep(
+                Icons.Filled.CallSplit,
+                "Split a bill",
+                "One payment, many parts: split a bill across categories, or assign someone's share to their udhaar so they owe you \u2014 all from \u201cSplit a bill\u201d."
+            ),
+        )
+        PEOPLE -> listOf(
+            TutorialStep(
+                Icons.Filled.People,
+                "Udhaar, sorted",
+                "Track money you've lent or borrowed, person by person. The running balance tells you who owes whom without any manual tallying."
+            ),
+            TutorialStep(
+                Icons.Filled.SwapHoriz,
+                "Gave or got",
+                "Log \u201cyou gave\u201d when you lend, \u201cyou got\u201d when you're repaid or borrow. Green means they owe you, rust means you owe them."
+            ),
+            TutorialStep(
+                Icons.Filled.CheckCircle,
+                "Settle up in one tap",
+                "\u201cSettle up\u201d clears a balance to zero with a single offsetting entry. Amounts here are expression-capable too."
+            ),
+            TutorialStep(
+                Icons.Filled.Notifications,
+                "Gentle reminders",
+                "If a balance sits unsettled for a couple of weeks, Khaata can nudge you \u2014 toggle it under Settings \u203a Udhaar reminders."
+            ),
+        )
+        SEARCH -> listOf(
+            TutorialStep(
+                Icons.Filled.Search,
+                "Find any entry, ever",
+                "Search across every month at once by note, category, or amount \u2014 not just the month you're viewing."
+            ),
+            TutorialStep(
+                Icons.Filled.Repeat,
+                "Act on results",
+                "Edit, delete, or \u201clog again today\u201d straight from the results \u2014 handy for repeating a spend you made before."
+            ),
         )
         ANALYTICS -> listOf(
             TutorialStep(
                 Icons.Filled.ShowChart,
                 "Spot the trend",
-                "See how your spending and savings have moved over past months, and which categories are creeping up."
+                "See how your spending and savings have moved over past months, and which categories are creeping up or cooling down."
             ),
         )
         HISTORY -> listOf(
