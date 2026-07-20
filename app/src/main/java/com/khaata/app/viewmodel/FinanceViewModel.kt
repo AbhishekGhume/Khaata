@@ -51,8 +51,11 @@ data class UiMessage(
 class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() {
 
     // One-shot messages (write failures, "deleted — Undo", etc.). Buffered so an
-    // emit from a background coroutine never suspends or drops silently.
-    private val _messages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 8)
+    // emit from a background coroutine never suspends. The collector drains one
+    // snackbar at a time (up to ~10s each for Undo), so the buffer is sized well
+    // past any realistic burst — at 8 an offline flurry could silently drop a
+    // "deleted — Undo" on the floor.
+    private val _messages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 64)
     val messages: SharedFlow<UiMessage> = _messages.asSharedFlow()
 
     private fun postMessage(text: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
@@ -120,6 +123,31 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
             runCatching { repository.ensureCategoriesSeeded() }
             runCatching { repository.postDueRecurring(currentMonthKey()) }
             runCatching { computeRolloverOffer() }
+        }
+    }
+
+    /**
+     * Re-runs the calendar-keyed passes (recurring back-fill, rollover offer) when
+     * the app comes back to the foreground on a different day than it last ran.
+     * The init block only fires on ViewModel creation, so an app left open across
+     * midnight on the 1st (or a rent's due day) would otherwise not post/offer
+     * until the next full relaunch. Called from an ON_START observer in the UI.
+     */
+    private var lastDailyPassDate: String = todayStr()
+    fun onAppForegrounded() {
+        val today = todayStr()
+        val lastRun = lastDailyPassDate
+        if (today == lastRun) return
+        lastDailyPassDate = today
+        viewModelScope.launch {
+            runCatching { repository.postDueRecurring(currentMonthKey()) }
+            runCatching { computeRolloverOffer() }
+            // If the calendar month turned over while the user was parked on what
+            // *was* the current month, follow it so "this month" stays this month.
+            val current = currentMonthKey()
+            if (monthKeyFromDate(lastRun) != current && _viewedMonthKey.value == monthKeyFromDate(lastRun)) {
+                _viewedMonthKey.value = current
+            }
         }
     }
 
@@ -285,21 +313,28 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     }
 
     fun addGoal(name: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {
-        if (validateGoalTarget(null, targetAmount, targetDate) != null) return@launch
+        // Screens pre-validate, but if one forgets, surface the reason instead of
+        // silently doing nothing on tap.
+        validateGoalTarget(null, targetAmount, targetDate)?.let { postMessage(it); return@launch }
         runCatching {
             repository.addGoal(Goal(name = name, targetAmount = targetAmount, targetDate = targetDate, createdAt = todayStr()))
         }.onFailure { postMessage("Couldn't create the goal — nothing was saved.") }
     }
 
     fun updateGoalTarget(goalId: String, targetAmount: Double, targetDate: String) = viewModelScope.launch {
-        if (validateGoalTarget(goalId, targetAmount, targetDate) != null) return@launch
+        validateGoalTarget(goalId, targetAmount, targetDate)?.let { postMessage(it); return@launch }
         runCatching { repository.updateGoalTarget(goalId, targetAmount, targetDate) }
             .onFailure { postMessage("Couldn't update the goal.") }
     }
 
     fun deleteGoal(goal: Goal) = viewModelScope.launch {
-        // Capture the contribution log first so a delete can be fully undone.
-        val contributions = runCatching { repository.getAllContributions(goal.id) }.getOrDefault(emptyList())
+        // Capture the contribution log first so a delete can be fully undone. If the
+        // capture fails (flaky network), abort the delete — proceeding with an empty
+        // snapshot would make Undo restore the goal with no history.
+        val contributions = runCatching { repository.getAllContributions(goal.id) }.getOrElse {
+            postMessage("Couldn't delete the goal — check your connection and try again.")
+            return@launch
+        }
         runCatching { repository.deleteGoal(goal.id) }
             .onSuccess {
                 postMessage("\"${goal.name}\" deleted.", actionLabel = "Undo") {
@@ -335,7 +370,7 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
 
     fun setBudget(category: String, limitAmount: Double) = viewModelScope.launch {
         if (_viewedMonthKey.value != currentMonthKey()) return@launch
-        if (validateBudgetLimit(category, limitAmount) != null) return@launch
+        validateBudgetLimit(category, limitAmount)?.let { postMessage(it); return@launch }
         runCatching { repository.setBudget(_viewedMonthKey.value, category, limitAmount) }
             .onFailure { postMessage("Couldn't save the budget.") }
     }
@@ -396,6 +431,10 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
      */
     fun budgetAllocationWarning(category: String, limitAmount: Double): String? {
         val income = monthSummary.value.income
+        // No income known — either genuinely unset or the WhileSubscribed flow
+        // hasn't emitted its first Firestore value yet. Either way a "more than
+        // your ₹0 income" heads-up is noise, not guidance; stay quiet.
+        if (income <= 0.0) return null
         val otherBudgetsTotal = budgets.value
             .filterNot { it.category == category }
             .sumOf { it.limitAmount }
@@ -438,6 +477,8 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
         if (runCatching { LocalDate.parse(targetDate) }.isFailure) return null
 
         val income = monthSummary.value.income
+        // Same zero-income guard as budgetAllocationWarning.
+        if (income <= 0.0) return null
         val proposedGoal = goals.value.firstOrNull { it.id == goalId }
             ?.copy(targetAmount = targetAmount, targetDate = targetDate)
             ?: Goal(
@@ -518,8 +559,13 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     }
 
     fun deletePerson(person: Person) = viewModelScope.launch {
-        // Capture the ledger first so a delete can be fully undone.
-        val entries = runCatching { repository.getPersonLedger(person.id) }.getOrDefault(emptyList())
+        // Capture the ledger first so a delete can be fully undone. If the capture
+        // fails, abort the delete — proceeding with an empty snapshot would make
+        // Undo restore the person with no ledger (and a balance nothing backs).
+        val entries = runCatching { repository.getPersonLedger(person.id) }.getOrElse {
+            postMessage("Couldn't remove \"${person.name}\" — check your connection and try again.")
+            return@launch
+        }
         runCatching { repository.deletePerson(person.id) }
             .onSuccess {
                 postMessage("\"${person.name}\" removed.", actionLabel = "Undo") {
@@ -638,6 +684,33 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
             .onSuccess { _allExpenses.value = it }
             .onFailure { postMessage("Couldn't load expenses for search.") }
         _allExpensesLoading.value = false
+    }
+
+    // ── Ledger verification ──────────────────────────────────────────────────
+
+    private val _reconciling = MutableStateFlow(false)
+    val reconciling: StateFlow<Boolean> = _reconciling
+
+    /**
+     * Recomputes every stored running total (month totals, goal savings, udhaar
+     * balances) from its underlying rows and repairs any drift. Reports the result
+     * as a snackbar; the totals themselves update live via the snapshot listeners.
+     */
+    fun verifyLedger() = viewModelScope.launch {
+        if (_reconciling.value) return@launch
+        _reconciling.value = true
+        runCatching { repository.reconcileTotals() }
+            .onSuccess { report ->
+                postMessage(
+                    if (report.repaired == 0) {
+                        "Ledger verified — all ${report.checked} totals match their entries."
+                    } else {
+                        "Ledger verified — repaired ${report.repaired} of ${report.checked} totals."
+                    }
+                )
+            }
+            .onFailure { postMessage("Couldn't verify the ledger — check your connection and try again.") }
+        _reconciling.value = false
     }
 
     // ── Full backup ───────────────────────────────────────────────────────────

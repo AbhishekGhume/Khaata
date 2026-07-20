@@ -21,6 +21,11 @@ import java.util.Calendar
 const val KHAATA_NOTIFICATION_CHANNEL_ID = "khaata_reminders"
 const val BUDGET_WARNING_NOTIFICATION_ID = 1001
 const val INACTIVITY_NOTIFICATION_ID = 1002
+// Reserved id ranges, kept disjoint so one notification never silently replaces
+// another kind: goal milestones use 2000 + milestone + hash%1000 (2025..3099),
+// the daily reminder is 4001, udhaar nudges use 5000 + hash%1000 (5000..5999).
+const val DAILY_REMINDER_NOTIFICATION_ID = 4001
+const val UDHAAR_NOTIFICATION_ID_BASE = 5000
 const val EXTRA_OPEN_ADD_ENTRY = "com.khaata.app.notifications.EXTRA_OPEN_ADD_ENTRY"
 // Which tab an alert notification should land on when tapped ("budgets" | "goals").
 const val EXTRA_OPEN_TAB = "com.khaata.app.notifications.EXTRA_OPEN_TAB"

@@ -22,6 +22,7 @@ import com.khaata.app.data.model.RecurringExpense
 import com.khaata.app.data.model.Template
 import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
+import com.khaata.app.data.model.roundMoney
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.khaata.app.util.CategoryMeta
@@ -29,8 +30,10 @@ import com.khaata.app.util.DEFAULT_CATEGORIES
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.tasks.await
 
 /**
@@ -49,6 +52,17 @@ import kotlinx.coroutines.tasks.await
  */
 class FinanceRepository(private val uid: String) {
 
+    /**
+     * Fails the flow on a listener error, then resubscribes with linear backoff
+     * (capped at 30s). Firestore stops delivering snapshots once a listener errors
+     * (e.g. a permission blip during token refresh) — swallowing the error would
+     * leave the UI rendering the last value forever with no signal and no recovery.
+     */
+    private fun <T> Flow<T>.retryOnSnapshotError(): Flow<T> = retryWhen { _, attempt ->
+        delay(((attempt + 1) * 1000L).coerceAtMost(30_000L))
+        true
+    }
+
     private val db = FirebaseFirestore.getInstance()
     private val userRoot get() = db.collection("users").document(uid)
     private fun monthsRef() = userRoot.collection("months")
@@ -61,7 +75,7 @@ class FinanceRepository(private val uid: String) {
 
     fun observeMonthSummary(monthKey: String): Flow<MonthSummary> = callbackFlow {
         val reg = monthsRef().document(monthKey).addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             if (snap != null && snap.exists()) {
                 trySend(
                     MonthSummary(
@@ -75,13 +89,13 @@ class FinanceRepository(private val uid: String) {
             }
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     fun observeExpenses(monthKey: String): Flow<List<Expense>> = callbackFlow {
         val reg = monthsRef().document(monthKey).collection("expenses")
             .orderBy("date", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, err ->
-                if (err != null) return@addSnapshotListener
+                if (err != null) { close(err); return@addSnapshotListener }
                 val list = snap?.documents?.map { d ->
                     Expense(
                         id = d.id,
@@ -94,11 +108,11 @@ class FinanceRepository(private val uid: String) {
                 trySend(list)
             }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     fun observeAllMonths(): Flow<List<MonthSummary>> = callbackFlow {
         val reg = monthsRef().addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             val list = snap?.documents?.map { d ->
                 MonthSummary(
                     monthKey = d.id,
@@ -109,11 +123,11 @@ class FinanceRepository(private val uid: String) {
             trySend(list)
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     fun observeBudgets(monthKey: String): Flow<List<Budget>> = callbackFlow {
         val reg = budgetsRef().whereEqualTo("monthKey", monthKey).addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             val list = snap?.documents?.map { d ->
                 Budget(
                     id = d.id,
@@ -125,7 +139,7 @@ class FinanceRepository(private val uid: String) {
             trySend(list.sortedBy { it.category })
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     suspend fun loadBudgetProgress(monthKey: String): List<BudgetProgress> {
         val budgets = budgetsRef().whereEqualTo("monthKey", monthKey).get().await().documents.map { d ->
@@ -156,7 +170,7 @@ class FinanceRepository(private val uid: String) {
         budgetsRef().document("${monthKey}_$category").set(
             mapOf(
                 "category" to category,
-                "limitAmount" to limitAmount,
+                "limitAmount" to roundMoney(limitAmount),
                 "monthKey" to monthKey
             )
         ).await()
@@ -310,7 +324,7 @@ class FinanceRepository(private val uid: String) {
 
     fun observeGoals(): Flow<List<Goal>> = callbackFlow {
         val reg = goalsRef().orderBy("createdAt").addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             val list = snap?.documents?.map { d ->
                 @Suppress("UNCHECKED_CAST")
                 val rawContrib = d.get("monthlyContributions") as? Map<String, Any?> ?: emptyMap()
@@ -327,29 +341,34 @@ class FinanceRepository(private val uid: String) {
             trySend(list)
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     fun observeContributions(goalId: String): Flow<List<Contribution>> = callbackFlow {
         val reg = goalsRef().document(goalId).collection("contributions")
             .orderBy("date", Query.Direction.DESCENDING)
             .limit(5)
             .addSnapshotListener { snap, err ->
-                if (err != null) return@addSnapshotListener
+                if (err != null) { close(err); return@addSnapshotListener }
                 val list = snap?.documents?.map { d ->
                     Contribution(id = d.id, amount = d.getDouble("amount") ?: 0.0, date = d.getString("date") ?: "")
                 } ?: emptyList()
                 trySend(list)
             }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     suspend fun setIncome(monthKey: String, income: Double) {
-        monthsRef().document(monthKey).set(mapOf("income" to income), SetOptions.merge()).await()
+        monthsRef().document(monthKey).set(mapOf("income" to roundMoney(income)), SetOptions.merge()).await()
     }
 
     suspend fun addExpense(monthKey: String, expense: Expense) {
         val monthRef = monthsRef().document(monthKey)
         val expenseRef = monthRef.collection("expenses").document()
+        // Amounts are rounded to whole paise at this boundary (and every other
+        // write boundary in this class): totals are maintained by repeated
+        // FieldValue.increment on Doubles, so an unrounded 10/3 would accumulate
+        // float error across increments and drift the total from its rows.
+        val amount = roundMoney(expense.amount)
         // One batch so the expense doc and the running `totalExpenses` can never
         // disagree: either both land or neither does. A crash/network drop
         // between two separate writes used to leave the total permanently off.
@@ -358,52 +377,79 @@ class FinanceRepository(private val uid: String) {
                 expenseRef,
                 mapOf(
                     "category" to expense.category,
-                    "amount" to expense.amount,
+                    "amount" to amount,
                     "note" to expense.note,
                     "date" to expense.date
                 )
             )
             // merge creates the month doc if absent, or atomically bumps the total.
-            set(monthRef, mapOf("totalExpenses" to FieldValue.increment(expense.amount)), SetOptions.merge())
+            set(monthRef, mapOf("totalExpenses" to FieldValue.increment(amount)), SetOptions.merge())
         }.commit().await()
     }
 
+    /**
+     * Deletes an expense and reverses its effect on the month total. Runs as a
+     * transaction that re-reads the doc first: a blind batch (delete + unconditional
+     * decrement) corrupts `totalExpenses` forever if the doc was already deleted from
+     * another device — the delete silently "succeeds" while the total drops twice.
+     * If the doc is already gone this is a no-op (whoever deleted it adjusted the
+     * total). The decrement uses the *stored* amount, not the caller's possibly-stale
+     * snapshot of it, for the same reason.
+     */
     suspend fun deleteExpense(monthKey: String, expenseId: String, amount: Double) {
         val monthRef = monthsRef().document(monthKey)
-        db.batch().apply {
-            delete(monthRef.collection("expenses").document(expenseId))
-            set(monthRef, mapOf("totalExpenses" to FieldValue.increment(-amount)), SetOptions.merge())
-        }.commit().await()
+        val expenseRef = monthRef.collection("expenses").document(expenseId)
+        db.runTransaction { txn ->
+            val snap = txn.get(expenseRef)
+            if (snap.exists()) {
+                val storedAmount = snap.getDouble("amount") ?: amount
+                txn.delete(expenseRef)
+                txn.set(monthRef, mapOf("totalExpenses" to FieldValue.increment(-storedAmount)), SetOptions.merge())
+            }
+            null
+        }.await()
     }
 
     /**
      * Edits an existing expense atomically, adjusting the affected month total(s).
      * If the new date lands in a different month, the entry is moved: removed from
      * the old month (and its total) and re-created in the new month — all in one
-     * batch so nothing is ever double-counted or lost midway.
+     * transaction so nothing is ever double-counted or lost midway.
+     *
+     * The transaction re-reads the doc and throws if it no longer exists (deleted
+     * from another device): a blind `set` would silently resurrect the deleted doc
+     * while the month total stays short by the old amount. The failure surfaces as
+     * the ViewModel's normal "couldn't save" message.
      */
     suspend fun updateExpense(oldMonthKey: String, expenseId: String, oldAmount: Double, updated: Expense) {
         val newMonthKey = com.khaata.app.data.model.monthKeyFromDate(updated.date)
+        val newAmount = roundMoney(updated.amount)
         val fields = mapOf(
             "category" to updated.category,
-            "amount" to updated.amount,
+            "amount" to newAmount,
             "note" to updated.note,
             "date" to updated.date
         )
-        val batch = db.batch()
-        if (newMonthKey == oldMonthKey) {
-            val monthRef = monthsRef().document(oldMonthKey)
-            batch.set(monthRef.collection("expenses").document(expenseId), fields)
-            batch.set(monthRef, mapOf("totalExpenses" to FieldValue.increment(updated.amount - oldAmount)), SetOptions.merge())
-        } else {
-            val oldMonthRef = monthsRef().document(oldMonthKey)
-            val newMonthRef = monthsRef().document(newMonthKey)
-            batch.delete(oldMonthRef.collection("expenses").document(expenseId))
-            batch.set(oldMonthRef, mapOf("totalExpenses" to FieldValue.increment(-oldAmount)), SetOptions.merge())
-            batch.set(newMonthRef.collection("expenses").document(), fields)
-            batch.set(newMonthRef, mapOf("totalExpenses" to FieldValue.increment(updated.amount)), SetOptions.merge())
-        }
-        batch.commit().await()
+        val oldMonthRef = monthsRef().document(oldMonthKey)
+        val oldExpenseRef = oldMonthRef.collection("expenses").document(expenseId)
+        // Generated outside the transaction body so a retry reuses the same id.
+        val movedRef = monthsRef().document(newMonthKey).collection("expenses").document()
+        db.runTransaction { txn ->
+            val snap = txn.get(oldExpenseRef)
+            check(snap.exists()) { "Expense no longer exists" }
+            val storedOldAmount = snap.getDouble("amount") ?: oldAmount
+            if (newMonthKey == oldMonthKey) {
+                txn.set(oldExpenseRef, fields)
+                txn.set(oldMonthRef, mapOf("totalExpenses" to FieldValue.increment(newAmount - storedOldAmount)), SetOptions.merge())
+            } else {
+                val newMonthRef = monthsRef().document(newMonthKey)
+                txn.delete(oldExpenseRef)
+                txn.set(oldMonthRef, mapOf("totalExpenses" to FieldValue.increment(-storedOldAmount)), SetOptions.merge())
+                txn.set(movedRef, fields)
+                txn.set(newMonthRef, mapOf("totalExpenses" to FieldValue.increment(newAmount)), SetOptions.merge())
+            }
+            null
+        }.await()
     }
 
     suspend fun addGoal(goal: Goal) {
@@ -460,33 +506,56 @@ class FinanceRepository(private val uid: String) {
 
     suspend fun logContribution(goalId: String, monthKey: String, amount: Double, date: String) {
         val goalRef = goalsRef().document(goalId)
+        val rounded = roundMoney(amount)
         db.batch().apply {
-            set(goalRef.collection("contributions").document(), mapOf("amount" to amount, "date" to date))
+            set(goalRef.collection("contributions").document(), mapOf("amount" to rounded, "date" to date))
             update(
                 goalRef,
                 mapOf(
-                    "savedAmount" to FieldValue.increment(amount),
-                    "monthlyContributions.$monthKey" to FieldValue.increment(amount)
+                    "savedAmount" to FieldValue.increment(rounded),
+                    "monthlyContributions.$monthKey" to FieldValue.increment(rounded)
                 )
             )
         }.commit().await()
     }
 
     /**
-     * Edits (or, when [newAmount] is 0, removes) the total saved for one month of a
-     * goal. GoalsScreen shows contributions rolled up per month, so an edit operates
-     * on that month's aggregate: `savedAmount` moves by the delta and the month's map
-     * entry is set to the exact new value (or deleted). Atomic via a batch.
+     * Edits (or, when [newAmount] is <= 0, removes) the total saved for one month of
+     * a goal. GoalsScreen shows contributions rolled up per month, so an edit
+     * operates on that month's aggregate: `savedAmount` moves by the delta, the
+     * month's map entry is set to the exact new value (or deleted), and the month's
+     * raw contribution docs are replaced by a single doc holding the new total — so
+     * the subcollection (which feeds the recent-contributions list and delete/undo
+     * snapshots) always sums back to the aggregates. All in one batch.
+     *
+     * A negative [newAmount] is clamped to "remove": the effective value the month
+     * ends up with is what drives the `savedAmount` delta, never the raw input —
+     * otherwise a stray "-100" would move `savedAmount` by more than the month map,
+     * and the two would disagree forever.
      */
     suspend fun editMonthlyContribution(goalId: String, monthKey: String, oldAmount: Double, newAmount: Double) {
         val goalRef = goalsRef().document(goalId)
-        val monthValue: Any = if (newAmount <= 0.0) FieldValue.delete() else newAmount
-        goalRef.update(
-            mapOf(
-                "savedAmount" to FieldValue.increment(newAmount - oldAmount),
-                "monthlyContributions.$monthKey" to monthValue
+        val effectiveNew = roundMoney(newAmount.coerceAtLeast(0.0))
+        val monthDocs = goalRef.collection("contributions")
+            .whereGreaterThanOrEqualTo("date", "$monthKey-01")
+            .whereLessThanOrEqualTo("date", "$monthKey-31")
+            .get().await().documents
+        // Keep the month's latest entry date on the replacement doc so the recent
+        // list stays plausibly ordered; fall back to the 1st for an empty month.
+        val replacementDate = monthDocs.mapNotNull { it.getString("date") }.maxOrNull() ?: "$monthKey-01"
+        db.batch().apply {
+            monthDocs.forEach { delete(it.reference) }
+            if (effectiveNew > 0.0) {
+                set(goalRef.collection("contributions").document(), mapOf("amount" to effectiveNew, "date" to replacementDate))
+            }
+            update(
+                goalRef,
+                mapOf(
+                    "savedAmount" to FieldValue.increment(effectiveNew - oldAmount),
+                    "monthlyContributions.$monthKey" to if (effectiveNew <= 0.0) FieldValue.delete() else effectiveNew
+                )
             )
-        ).await()
+        }.commit().await()
     }
 
     /** All contribution docs for a goal — captured before a delete so it can be undone. */
@@ -546,7 +615,7 @@ class FinanceRepository(private val uid: String) {
 
     fun observePeople(): Flow<List<Person>> = callbackFlow {
         val reg = contactsRef().orderBy("createdAt").addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             val list = snap?.documents?.map { d ->
                 Person(
                     id = d.id,
@@ -559,13 +628,13 @@ class FinanceRepository(private val uid: String) {
             trySend(list)
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     fun observeLedger(personId: String): Flow<List<LedgerEntry>> = callbackFlow {
         val reg = contactsRef().document(personId).collection("ledger")
             .orderBy("date", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, err ->
-                if (err != null) return@addSnapshotListener
+                if (err != null) { close(err); return@addSnapshotListener }
                 val list = snap?.documents?.map { d ->
                     LedgerEntry(
                         id = d.id,
@@ -577,7 +646,7 @@ class FinanceRepository(private val uid: String) {
                 trySend(list)
             }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     suspend fun addPerson(person: Person) {
         contactsRef().document().set(
@@ -597,19 +666,32 @@ class FinanceRepository(private val uid: String) {
      */
     suspend fun recordLedgerEntry(personId: String, amount: Double, note: String, date: String) {
         val personRef = contactsRef().document(personId)
+        val rounded = roundMoney(amount)
         db.batch().apply {
-            set(personRef.collection("ledger").document(), mapOf("amount" to amount, "note" to note, "date" to date))
-            update(personRef, mapOf("balance" to FieldValue.increment(amount)))
+            set(personRef.collection("ledger").document(), mapOf("amount" to rounded, "note" to note, "date" to date))
+            update(personRef, mapOf("balance" to FieldValue.increment(rounded)))
         }.commit().await()
     }
 
-    /** Deletes one ledger entry and reverses its effect on the balance. Atomic. */
+    /**
+     * Deletes one ledger entry and reverses its effect on the balance. A transaction
+     * (not a blind batch) so a double-delete from two devices can't decrement the
+     * balance twice — the udhaar balance is the answer to "who owes whom", so drift
+     * here is worse than anywhere else. Already-gone entry → no-op. The reversal uses
+     * the stored signed amount, not the caller's snapshot of it.
+     */
     suspend fun deleteLedgerEntry(personId: String, entryId: String, amount: Double) {
         val personRef = contactsRef().document(personId)
-        db.batch().apply {
-            delete(personRef.collection("ledger").document(entryId))
-            update(personRef, mapOf("balance" to FieldValue.increment(-amount)))
-        }.commit().await()
+        val entryRef = personRef.collection("ledger").document(entryId)
+        db.runTransaction { txn ->
+            val snap = txn.get(entryRef)
+            if (snap.exists()) {
+                val storedAmount = snap.getDouble("amount") ?: amount
+                txn.delete(entryRef)
+                txn.update(personRef, mapOf("balance" to FieldValue.increment(-storedAmount)))
+            }
+            null
+        }.await()
     }
 
     suspend fun deletePerson(personId: String) {
@@ -697,7 +779,7 @@ class FinanceRepository(private val uid: String) {
 
     fun observeCategories(): Flow<List<CategoryMeta>> = callbackFlow {
         val reg = categoriesRef().orderBy("order").addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             val list = snap?.documents?.mapNotNull { d ->
                 val label = d.getString("label") ?: return@mapNotNull null
                 CategoryMeta(
@@ -712,7 +794,7 @@ class FinanceRepository(private val uid: String) {
             trySend(list.ifEmpty { DEFAULT_CATEGORIES })
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     /** Writes the built-in defaults the first time, if the collection is empty. */
     suspend fun ensureCategoriesSeeded() {
@@ -733,12 +815,18 @@ class FinanceRepository(private val uid: String) {
     }
 
     suspend fun upsertCategory(key: String, label: String, color: Color, iconKey: String, order: Int) {
+        // An edit keeps the doc's stored `order`; [order] only seeds brand-new
+        // categories. The caller derives it from the list *index*, which disagrees
+        // with stored orders once deletions leave gaps — writing it back on a rename
+        // could collide with another category's order and visibly swap the two.
+        val existingOrder = categoriesRef().document(key).get().await()
+            .takeIf { it.exists() }?.getLong("order")?.toInt()
         categoriesRef().document(key).set(
             mapOf(
                 "label" to label,
                 "colorArgb" to color.toArgb().toLong(),
                 "iconKey" to iconKey,
-                "order" to order
+                "order" to (existingOrder ?: order)
             )
         ).await()
     }
@@ -789,7 +877,7 @@ class FinanceRepository(private val uid: String) {
 
     fun observeRecurring(): Flow<List<RecurringExpense>> = callbackFlow {
         val reg = recurringRef().orderBy("createdAt").addSnapshotListener { snap, err ->
-            if (err != null) return@addSnapshotListener
+            if (err != null) { close(err); return@addSnapshotListener }
             val list = snap?.documents?.map { d ->
                 RecurringExpense(
                     id = d.id,
@@ -805,13 +893,13 @@ class FinanceRepository(private val uid: String) {
             trySend(list)
         }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     suspend fun addRecurring(recurring: RecurringExpense) {
         recurringRef().document().set(
             mapOf(
                 "category" to recurring.category,
-                "amount" to recurring.amount,
+                "amount" to roundMoney(recurring.amount),
                 "note" to recurring.note,
                 "dayOfMonth" to recurring.dayOfMonth,
                 "active" to recurring.active,
@@ -825,7 +913,7 @@ class FinanceRepository(private val uid: String) {
         recurringRef().document(id).update(
             mapOf(
                 "category" to category,
-                "amount" to amount,
+                "amount" to roundMoney(amount),
                 "note" to note,
                 "dayOfMonth" to dayOfMonth
             )
@@ -876,13 +964,6 @@ class FinanceRepository(private val uid: String) {
 
         for (d in actives) {
             val templateRef = recurringRef().document(d.id)
-            val amount = d.getDouble("amount") ?: 0.0
-            val category = d.getString("category") ?: "other"
-            val note = d.getString("note") ?: ""
-            val day = (d.getLong("dayOfMonth") ?: 1L).toInt()
-            val createdAt = d.getString("createdAt") ?: ""
-            val createdMonth = runCatching { YearMonth.parse(createdAt.substring(0, 7)) }.getOrNull()
-            val createdDate = runCatching { LocalDate.parse(createdAt) }.getOrNull()
 
             // One transaction per template. Isolating each template means one
             // template's failure can't abort another's, while the transaction's
@@ -894,6 +975,18 @@ class FinanceRepository(private val uid: String) {
                     // off between the query above and now.
                     if (!(snap.getBoolean("active") ?: true)) return@runTransaction null
                     val lastPosted = snap.getString("lastPostedMonth") ?: ""
+                    // All posting fields come from the in-transaction read, not the
+                    // pre-transaction query snapshot `d` — otherwise a concurrent
+                    // edit (rent ₹10k → ₹12k) between the query and the commit would
+                    // post at the stale amount while the retry logic happily commits
+                    // (only `lastPostedMonth` would be re-checked).
+                    val amount = roundMoney(snap.getDouble("amount") ?: 0.0)
+                    val category = snap.getString("category") ?: "other"
+                    val note = snap.getString("note") ?: ""
+                    val day = (snap.getLong("dayOfMonth") ?: 1L).toInt()
+                    val createdAt = snap.getString("createdAt") ?: ""
+                    val createdMonth = runCatching { YearMonth.parse(createdAt.substring(0, 7)) }.getOrNull()
+                    val createdDate = runCatching { LocalDate.parse(createdAt) }.getOrNull()
 
                     // Earliest month we might owe an expense for: the month after the
                     // last one posted, or the creation month on the very first run so
@@ -947,7 +1040,7 @@ class FinanceRepository(private val uid: String) {
     fun observeTemplates(): Flow<List<Template>> = callbackFlow {
         val reg = templatesRef().orderBy("createdAt", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, err ->
-                if (err != null) return@addSnapshotListener
+                if (err != null) { close(err); return@addSnapshotListener }
                 val list = snap?.documents?.map { d ->
                     Template(
                         id = d.id,
@@ -961,7 +1054,7 @@ class FinanceRepository(private val uid: String) {
                 trySend(list)
             }
         awaitClose { reg.remove() }
-    }
+    }.retryOnSnapshotError()
 
     suspend fun addTemplate(template: Template) {
         templatesRef().document().set(
@@ -1308,5 +1401,154 @@ class FinanceRepository(private val uid: String) {
             all += expenses
         }
         return all.sortedByDescending { it.date }
+    }
+
+    // ── Reconciliation ──────────────────────────────────────────────────────
+    // The stored running totals (months.totalExpenses, goals.savedAmount +
+    // monthlyContributions, contacts.balance) are derived-but-stored: maintained
+    // by FieldValue.increment at write time so the UI never sums subcollections.
+    // Any historical drift (pre-transaction double deletes, float error from
+    // unrounded increments) is permanent until something recomputes them. This
+    // pass is that something: recompute each total from its rows and repair any
+    // that disagree. Safe to run repeatedly — a clean ledger writes nothing.
+
+    /** What a reconciliation run found/fixed, for the Settings screen to report. */
+    data class ReconcileReport(
+        val monthsChecked: Int = 0,
+        val monthsRepaired: Int = 0,
+        val goalsChecked: Int = 0,
+        val goalsRepaired: Int = 0,
+        val peopleChecked: Int = 0,
+        val peopleRepaired: Int = 0,
+    ) {
+        val repaired: Int get() = monthsRepaired + goalsRepaired + peopleRepaired
+        val checked: Int get() = monthsChecked + goalsChecked + peopleChecked
+    }
+
+    /**
+     * Repairs one aggregate doc if its stored value(s) disagree with [expected]
+     * beyond half a paisa. A transaction, not a blind write: a legitimate concurrent
+     * write (an expense added on another device mid-scan) bumps the doc between our
+     * subcollection read and this commit, and overwriting blindly would erase it.
+     * Instead the transaction re-derives "still wrong by exactly the drift we
+     * measured?" from a fresh read: it re-reads the doc, recomputes the delta
+     * against [expected] + [driftTolerance], and only writes when the fresh value
+     * still matches the stale one we computed [expected] from.
+     */
+    private suspend fun repairIfDrifted(
+        ref: DocumentReference,
+        staleValue: Double,
+        expected: Double,
+        fields: (Double) -> Map<String, Any>,
+        read: (com.google.firebase.firestore.DocumentSnapshot) -> Double,
+    ): Boolean {
+        if (kotlin.math.abs(staleValue - expected) < 0.005) return false
+        return db.runTransaction { txn ->
+            val snap = txn.get(ref)
+            if (!snap.exists()) return@runTransaction false
+            // The doc moved since we computed `expected` (concurrent legitimate
+            // write) — skip; the next run re-checks against the new state.
+            if (kotlin.math.abs(read(snap) - staleValue) >= 0.005) return@runTransaction false
+            txn.set(ref, fields(expected), SetOptions.merge())
+            true
+        }.await()
+    }
+
+    /**
+     * Recomputes every stored running total from its subcollection rows and repairs
+     * drift. Read cost is bounded: one full read of expenses/contributions/ledger
+     * rows per run — same order as a backup export. Meant to be triggered from
+     * Settings ("Verify ledger"), not on every app open.
+     */
+    suspend fun reconcileTotals(): ReconcileReport {
+        var report = ReconcileReport()
+
+        // Months: totalExpenses vs the sum of the month's expense docs.
+        val monthDocs = monthsRef().get().await().documents
+        for (m in monthDocs) {
+            val stored = m.getDouble("totalExpenses") ?: 0.0
+            val actual = roundMoney(
+                m.reference.collection("expenses").get().await()
+                    .documents.sumOf { it.getDouble("amount") ?: 0.0 }
+            )
+            val repaired = repairIfDrifted(
+                ref = m.reference,
+                staleValue = stored,
+                expected = actual,
+                fields = { mapOf("totalExpenses" to it) },
+                read = { it.getDouble("totalExpenses") ?: 0.0 },
+            )
+            report = report.copy(
+                monthsChecked = report.monthsChecked + 1,
+                monthsRepaired = report.monthsRepaired + if (repaired) 1 else 0
+            )
+        }
+
+        // Goals: savedAmount + the monthlyContributions map vs the contribution docs.
+        val goalDocs = goalsRef().get().await().documents
+        for (g in goalDocs) {
+            val storedSaved = g.getDouble("savedAmount") ?: 0.0
+            @Suppress("UNCHECKED_CAST")
+            val storedMonths = (g.get("monthlyContributions") as? Map<String, Number>).orEmpty()
+            val rows = g.reference.collection("contributions").get().await().documents
+            val actualSaved = roundMoney(rows.sumOf { it.getDouble("amount") ?: 0.0 })
+            val actualMonths = rows
+                .groupBy { com.khaata.app.data.model.monthKeyFromDate(it.getString("date") ?: "") }
+                .mapValues { (_, docs) -> roundMoney(docs.sumOf { it.getDouble("amount") ?: 0.0 }) }
+                .filterValues { it != 0.0 }
+            val monthsDrifted = actualMonths.keys.union(storedMonths.keys).any { key ->
+                kotlin.math.abs((storedMonths[key]?.toDouble() ?: 0.0) - (actualMonths[key] ?: 0.0)) >= 0.005
+            }
+            val repaired = if (monthsDrifted) {
+                // Map drift can't reuse repairIfDrifted's scalar compare — repair the
+                // whole aggregate in one transaction guarded on savedAmount instead.
+                db.runTransaction { txn ->
+                    val snap = txn.get(g.reference)
+                    if (!snap.exists()) return@runTransaction false
+                    if (kotlin.math.abs((snap.getDouble("savedAmount") ?: 0.0) - storedSaved) >= 0.005) return@runTransaction false
+                    txn.set(
+                        g.reference,
+                        mapOf("savedAmount" to actualSaved, "monthlyContributions" to actualMonths),
+                        SetOptions.merge()
+                    )
+                    true
+                }.await()
+            } else {
+                repairIfDrifted(
+                    ref = g.reference,
+                    staleValue = storedSaved,
+                    expected = actualSaved,
+                    fields = { mapOf("savedAmount" to it) },
+                    read = { it.getDouble("savedAmount") ?: 0.0 },
+                )
+            }
+            report = report.copy(
+                goalsChecked = report.goalsChecked + 1,
+                goalsRepaired = report.goalsRepaired + if (repaired) 1 else 0
+            )
+        }
+
+        // People: balance vs the sum of signed ledger amounts.
+        val peopleDocs = contactsRef().get().await().documents
+        for (p in peopleDocs) {
+            val stored = p.getDouble("balance") ?: 0.0
+            val actual = roundMoney(
+                p.reference.collection("ledger").get().await()
+                    .documents.sumOf { it.getDouble("amount") ?: 0.0 }
+            )
+            val repaired = repairIfDrifted(
+                ref = p.reference,
+                staleValue = stored,
+                expected = actual,
+                fields = { mapOf("balance" to it) },
+                read = { it.getDouble("balance") ?: 0.0 },
+            )
+            report = report.copy(
+                peopleChecked = report.peopleChecked + 1,
+                peopleRepaired = report.peopleRepaired + if (repaired) 1 else 0
+            )
+        }
+
+        return report
     }
 }

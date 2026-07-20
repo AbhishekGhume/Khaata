@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Rule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -87,6 +88,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -226,7 +230,12 @@ class MainActivity : FragmentActivity() {
                     // flashing the wizard for a frame.
                     onboardingDone == null -> LoadingScreen()
                     else -> {
+                        // Keyed by uid: without a key, viewModel() returns the cached
+                        // instance from the Activity's ViewModelStore and ignores the
+                        // new factory — after an account switch the old user's
+                        // ViewModel (and repository uid) would keep being served.
                         val viewModel: FinanceViewModel = viewModel(
+                            key = uid,
                             factory = FinanceViewModelFactory(FinanceRepository(uid!!))
                         )
                         if (onboardingDone == false) {
@@ -368,6 +377,19 @@ fun KhaataApp(
             )
             if (result == SnackbarResult.ActionPerformed) message.onAction?.invoke()
         }
+    }
+
+    // Re-run the calendar-keyed passes (recurring back-fill, rollover offer) when
+    // the app returns to the foreground on a new day — the ViewModel's init only
+    // covers cold starts, so an app left open across midnight on the 1st would
+    // otherwise miss the month turning over until the next relaunch.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) viewModel.onAppForegrounded()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(activeTab, activeSubScreen) {
@@ -783,6 +805,23 @@ fun KhaataApp(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
+                    )
+                    val reconciling by viewModel.reconciling.collectAsState()
+                    ListItem(
+                        headlineContent = { Text(if (reconciling) "Verifying ledger…" else "Verify ledger") },
+                        supportingContent = { Text("Recheck every total against its entries and repair drift") },
+                        leadingContent = {
+                            Icon(Icons.Filled.Rule, contentDescription = null, modifier = Modifier.size(20.dp))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .run {
+                                clickable(enabled = !reconciling) {
+                                    showMoreSheet = false
+                                    viewModel.verifyLedger()
+                                }
+                            }
                     )
                     ListItem(
                         headlineContent = { Text("Sign out", color = Rust) },

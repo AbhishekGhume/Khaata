@@ -42,14 +42,24 @@ data class GoalForecast(
     val estimatedHitDate: String?
 )
 
-fun Goal.forecast(): GoalForecast {
-    val recentAverage = monthlyContributions.entries
-        .sortedByDescending { it.key }
-        .take(3)
-        .map { it.value }
-        .filter { it > 0.0 }
-        .takeIf { it.isNotEmpty() }
-        ?.average() ?: 0.0
+/**
+ * "At your recent pace, when would this land?" — averaged over the trailing 3
+ * *calendar* months (zeros included), not the last 3 months that happen to have
+ * entries. A goal untouched for a year must forecast "no recent pace", not a
+ * near-term hit date computed from its old contribution bursts.
+ *
+ * The window is clamped to months since the goal was created (a goal made last
+ * month isn't penalized for the two months it didn't exist), and a goal created
+ * this month falls back to this month's contribution as its only signal.
+ */
+fun Goal.forecast(currentMonthKey: String = currentMonthKey()): GoalForecast {
+    val createdMonth = monthKeyFromDate(createdAt)
+    // Trailing full months only — the in-progress current month would understate
+    // the pace. yyyy-MM strings compare chronologically.
+    val window = (1..3).map { shiftMonth(currentMonthKey, -it) }
+        .filter { it >= createdMonth }
+        .ifEmpty { listOf(currentMonthKey) }
+    val recentAverage = window.map { monthlyContributions[it] ?: 0.0 }.average()
 
     val remainingAmount = (targetAmount - savedAmount).coerceAtLeast(0.0)
     val estimatedHitDate = when {

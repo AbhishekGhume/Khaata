@@ -159,8 +159,12 @@ fun Goal.computeStats(currentMonthKey: String): GoalStats {
     val monthsLeftRaw = (daysLeft.toDouble() / 30.44).coerceAtLeast(0.0)
     val remaining = (targetAmount - savedAmount).coerceAtLeast(0.0)
     val achieved = remaining <= 0.0
-    val overdue = !achieved && daysLeft < 0
-    val effectiveMonths = if (achieved) 1.0 else monthsLeftRaw.coerceAtLeast(0.1)
+    // Due *today* (and an unparseable stored date, which parses as today) counts as
+    // overdue — there is no time left to be merely "behind" in.
+    val overdue = !achieved && daysLeft <= 0
+    // Once the date has passed, "required monthly" means "what's left" — dividing by
+    // a floor of 0.1 months would tell the user they need 10× the remaining amount.
+    val effectiveMonths = if (achieved || overdue) 1.0 else monthsLeftRaw.coerceAtLeast(0.1)
     val requiredMonthly = if (achieved) 0.0 else remaining / effectiveMonths
     val contributedThisMonth = monthlyContributions[currentMonthKey] ?: 0.0
     val pct = if (targetAmount > 0) ((savedAmount / targetAmount) * 100).coerceIn(0.0, 100.0).toFloat() else 0f
@@ -217,3 +221,12 @@ fun monthLabel(key: String): String {
     return "$monthName ${ym.year}"
 }
 fun todayStr(): String = LocalDate.now().toString()
+
+/**
+ * Rounds to 2 decimals (whole paise). Every amount is rounded through this at the
+ * write boundary: money is stored as Double and running totals are maintained by
+ * repeated `FieldValue.increment`, so a non-representable value like 10/3 would
+ * otherwise accumulate binary floating-point error across hundreds of increments
+ * and slowly drift the stored total away from the exact sum of its rows.
+ */
+fun roundMoney(value: Double): Double = kotlin.math.round(value * 100.0) / 100.0

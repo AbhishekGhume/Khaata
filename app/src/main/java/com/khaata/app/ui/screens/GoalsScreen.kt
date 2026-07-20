@@ -56,6 +56,7 @@ import com.khaata.app.data.model.GoalStats
 import com.khaata.app.data.model.GoalStatus
 import com.khaata.app.data.model.computeStats
 import com.khaata.app.data.model.currentMonthKey
+import com.khaata.app.data.model.forecast
 import com.khaata.app.data.model.monthLabel
 import com.khaata.app.data.model.todayStr
 import com.khaata.app.ui.components.DatePickerField
@@ -369,6 +370,30 @@ private fun GoalCard(
                 StatCell(label = "SAVED SO FAR", value = formatINR(goal.savedAmount))
                 StatCell(label = "REMAINING", value = formatINR((goal.targetAmount - goal.savedAmount).coerceAtLeast(0.0)))
                 if (!stats.achieved) StatCell(label = "NEED / MONTH", value = formatINR(stats.requiredMonthly))
+            }
+
+            // ── Pace forecast ────────────────────────────────────────────────
+            // "At your recent pace, when does this land?" — honest about a stalled
+            // goal (recent average of zero → no fabricated hit date).
+            if (!stats.achieved) {
+                val fc = remember(goal) { goal.forecast() }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    when {
+                        fc.averageMonthlyContribution <= 0.0 ->
+                            "No contributions in the last 3 months — no pace to forecast from."
+                        fc.estimatedHitDate != null ->
+                            "At your recent pace (${formatINR(fc.averageMonthlyContribution)}/month), " +
+                                "you'd hit this around ${monthLabel(fc.estimatedHitDate.substring(0, 7))}."
+                        else -> ""
+                    },
+                    fontSize = 11.sp,
+                    color = when {
+                        fc.averageMonthlyContribution <= 0.0 -> Rust
+                        (fc.estimatedHitDate ?: "") <= goal.targetDate -> Green
+                        else -> Gold
+                    }
+                )
             }
 
             Spacer(Modifier.height(10.dp))

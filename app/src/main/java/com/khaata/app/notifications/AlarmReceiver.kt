@@ -37,6 +37,6 @@ class AlarmReceiver : BroadcastReceiver() {
         ) {
             return
         }
-        showReminderNotification(context, 3001, "Add today's entries", "Tap to add today's entries.")
+        showReminderNotification(context, DAILY_REMINDER_NOTIFICATION_ID, "Add today's entries", "Tap to add today's entries.")
     }
 }

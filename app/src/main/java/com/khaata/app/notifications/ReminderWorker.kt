@@ -130,7 +130,7 @@ class ReminderWorker(
                     saveUdhaarNudgeDate(applicationContext, person.id, today.toString())
                     showAlertNotification(
                         applicationContext,
-                        3000 + person.id.hashCode().absoluteValue % 1000,
+                        UDHAAR_NOTIFICATION_ID_BASE + person.id.hashCode().absoluteValue % 1000,
                         "Udhaar reminder",
                         message,
                         openTab = "people"

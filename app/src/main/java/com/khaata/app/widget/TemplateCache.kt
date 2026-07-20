@@ -1,6 +1,7 @@
 package com.khaata.app.widget
 
 import android.content.Context
+import com.google.firebase.auth.FirebaseAuth
 import com.khaata.app.data.model.Template
 import org.json.JSONArray
 import org.json.JSONObject
@@ -23,8 +24,15 @@ object TemplateCache {
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // Keyed per-uid for the same reason as CategoryCache: the popup reads this
+    // outside the auth-gated session, and an unkeyed cache would surface the
+    // previous account's templates after a user switch.
+    private fun jsonKey(): String? =
+        FirebaseAuth.getInstance().currentUser?.uid?.let { "${KEY_JSON}_$it" }
+
     /** Persists the list. Returns true when it differed from the cached copy. */
     fun save(context: Context, templates: List<Template>): Boolean {
+        val key = jsonKey() ?: return false
         val json = JSONArray().apply {
             templates.forEach { t ->
                 put(
@@ -36,14 +44,15 @@ object TemplateCache {
                 )
             }
         }.toString()
-        val stored = prefs(context).getString(KEY_JSON, null)
+        val stored = prefs(context).getString(key, null)
         if (stored == json) return false
-        prefs(context).edit().putString(KEY_JSON, json).apply()
+        prefs(context).edit().putString(key, json).apply()
         return true
     }
 
     fun load(context: Context): List<Template> {
-        val raw = prefs(context).getString(KEY_JSON, null) ?: return emptyList()
+        val key = jsonKey() ?: return emptyList()
+        val raw = prefs(context).getString(key, null) ?: return emptyList()
         return runCatching {
             val arr = JSONArray(raw)
             (0 until arr.length()).map { i ->
