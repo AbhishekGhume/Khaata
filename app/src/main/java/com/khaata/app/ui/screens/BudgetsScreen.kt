@@ -51,6 +51,9 @@ import com.khaata.app.data.model.BudgetProgress
 import com.khaata.app.data.model.BudgetStatus
 import com.khaata.app.data.model.currentMonthKey
 import com.khaata.app.data.model.monthLabel
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.khaata.app.ui.components.animatedListItem
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.GreenSoft
@@ -76,6 +79,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
     val budgets by viewModel.budgets.collectAsState()
     val categories by viewModel.categories.collectAsState()
     val isCurrentMonth = viewedMonthKey == currentMonthKey()
+    val haptics = LocalHapticFeedback.current
 
     var category by remember { mutableStateOf(CATEGORIES.first().key) }
     var limitDraft by remember { mutableStateOf("") }
@@ -145,6 +149,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
                                     if (validationError == null) {
                                         // Saved regardless of the allocation warning above — running
                                         // tight against income is normal and shouldn't block the save.
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         viewModel.setBudget(category, amount)
                                         budgetError = null
                                         limitDraft = ""
@@ -205,6 +210,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
         } else {
             items(budgetProgress, key = { it.category }) { progress ->
                 BudgetProgressCard(
+                    modifier = animatedListItem(),
                     progress = progress,
                     categories = categories,
                     canDelete = isCurrentMonth,
@@ -217,7 +223,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
             item { Text("Saved budgets", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
             items(budgets, key = { it.id }) { budget ->
                 val meta = categoryMeta(budget.category, categories)
-                Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
+                Surface(modifier = animatedListItem(), color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -265,6 +271,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
             text = { Text("${categoryMeta(cat, categories).label} cap of ${formatINR(limit)} will be removed for ${monthLabel(viewedMonthKey)}.") },
             confirmButton = {
                 TextButton(onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     viewModel.deleteBudget(cat, limit)
                     budgetToDelete = null
                 }) { Text("Remove", color = Rust) }
@@ -275,7 +282,7 @@ fun BudgetsScreen(viewModel: FinanceViewModel) {
 }
 
 @Composable
-private fun BudgetProgressCard(progress: BudgetProgress, categories: List<com.khaata.app.util.CategoryMeta>, canDelete: Boolean, onDelete: () -> Unit) {
+private fun BudgetProgressCard(progress: BudgetProgress, categories: List<com.khaata.app.util.CategoryMeta>, canDelete: Boolean, onDelete: () -> Unit, modifier: Modifier = Modifier) {
     val meta = categoryMeta(progress.category, categories)
     val (bg, fg, label) = when (progress.status) {
         BudgetStatus.ON_TRACK -> Triple(GreenSoft, Green, "On track")
@@ -283,7 +290,7 @@ private fun BudgetProgressCard(progress: BudgetProgress, categories: List<com.kh
         BudgetStatus.OVER -> Triple(RustSoft, Overdue, "Over budget")
     }
 
-    Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(12.dp)) {
+    Surface(modifier = modifier, color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(12.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BoxWithColor(meta.color)
@@ -320,6 +327,11 @@ private fun BudgetProgressCard(progress: BudgetProgress, categories: List<com.kh
 
 @Composable
 private fun BudgetBar(pct: Float, color: androidx.compose.ui.graphics.Color) {
+    val animatedFraction by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = (pct / 100f).coerceIn(0f, 1f),
+        animationSpec = com.khaata.app.ui.components.valueReveal(),
+        label = "budgetBar"
+    )
     Box(
         Modifier
             .fillMaxWidth()
@@ -328,7 +340,7 @@ private fun BudgetBar(pct: Float, color: androidx.compose.ui.graphics.Color) {
     ) {
         Box(
             Modifier
-                .fillMaxWidth(fraction = (pct / 100f).coerceIn(0f, 1f))
+                .fillMaxWidth(fraction = animatedFraction)
                 .height(10.dp)
                 .background(color, RoundedCornerShape(50))
         )

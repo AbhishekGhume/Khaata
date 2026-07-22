@@ -1,5 +1,7 @@
 package com.khaata.app.ui.screens
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +49,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -57,6 +61,8 @@ import com.khaata.app.data.model.Person
 import com.khaata.app.data.model.todayStr
 import com.khaata.app.ui.components.DatePickerField
 import com.khaata.app.ui.components.SummaryCard
+import com.khaata.app.ui.components.animatedListItem
+import com.khaata.app.ui.components.valueReveal
 import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.GreenSoft
 import com.khaata.app.ui.theme.Ink
@@ -82,6 +88,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
     val people by viewModel.people.collectAsState()
     val owedToYou = remember(people) { people.filter { it.balance > 0.0 }.sumOf { it.balance } }
     val youOwe = remember(people) { people.filter { it.balance < 0.0 }.sumOf { -it.balance } }
+    val haptics = LocalHapticFeedback.current
 
     var showAddForm by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
@@ -143,13 +150,15 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
                         modifier = Modifier.weight(1f),
                         label = "YOU ARE OWED",
                         value = formatINR(owedToYou),
-                        accent = Green
+                        accent = Green,
+                        animatedValue = owedToYou
                     )
                     SummaryCard(
                         modifier = Modifier.weight(1f),
                         label = "YOU OWE",
                         value = formatINR(youOwe),
-                        accent = Rust
+                        accent = Rust,
+                        animatedValue = youOwe
                     )
                 }
             }
@@ -183,6 +192,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
                             onClick = {
                                 val error = viewModel.validatePersonName(name)
                                 if (error == null) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.addPerson(name, note)
                                     name = ""; note = ""; addError = null; showAddForm = false
                                 } else {
@@ -215,6 +225,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
             val ledger by remember(person.id) { viewModel.ledgerFor(person.id) }
                 .collectAsState(initial = emptyList())
             PersonCard(
+                modifier = animatedListItem(),
                 person = person,
                 ledger = ledger,
                 isEntryOpen = openEntryPersonId == person.id,
@@ -232,6 +243,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
                 onSaveEntry = {
                     val amt = entryAmount.toDoubleOrNull()
                     if (amt != null && amt > 0) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         viewModel.recordLedgerEntry(person.id, if (entryGave) amt else -amt, entryNote, entryDate)
                         openEntryPersonId = null; entryAmount = ""; entryNote = ""; entryError = null
                     } else {
@@ -260,6 +272,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
             },
             confirmButton = {
                 TextButton(onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     viewModel.settleUp(person)
                     personToSettle = null
                 }) { Text("Settle up", color = Green) }
@@ -279,6 +292,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
             },
             confirmButton = {
                 TextButton(onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     viewModel.deletePerson(person)
                     personToDelete = null
                 }) { Text("Remove", color = Rust) }
@@ -291,6 +305,7 @@ fun PeopleScreen(viewModel: FinanceViewModel) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PersonCard(
+    modifier: Modifier = Modifier,
     person: Person,
     ledger: List<LedgerEntry>,
     isEntryOpen: Boolean,
@@ -322,11 +337,12 @@ private fun PersonCard(
     }
 
     Surface(
+        modifier = modifier,
         color = PaperCard,
         border = BorderStroke(1.dp, PaperLine),
         shape = RoundedCornerShape(10.dp)
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(16.dp).animateContentSize()) {
 
             // ── Top: name + status pill ─────────────────────────────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -365,8 +381,13 @@ private fun PersonCard(
                     letterSpacing = 0.3.sp
                 )
                 Spacer(Modifier.height(2.dp))
+                val animatedBalance by animateFloatAsState(
+                    targetValue = kotlin.math.abs(person.balance).toFloat(),
+                    animationSpec = valueReveal(),
+                    label = "balance"
+                )
                 Text(
-                    formatINR(kotlin.math.abs(person.balance)),
+                    formatINR(animatedBalance.toDouble()),
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,

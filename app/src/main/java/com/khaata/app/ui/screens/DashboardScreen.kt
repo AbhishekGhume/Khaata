@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -140,26 +141,30 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
                 SummaryCard(
                     modifier = Modifier.weight(1f),
                     label = "Income",
-                    value = formatINR(monthSummary.income)
+                    value = formatINR(monthSummary.income),
+                    animatedValue = monthSummary.income
                 )
                 SummaryCard(
                     modifier = Modifier.weight(1f),
                     label = "Kharcha",
                     value = formatINR(monthSummary.totalExpenses),
-                    accent = Rust
+                    accent = Rust,
+                    animatedValue = monthSummary.totalExpenses
                 )
                 SummaryCard(
                     modifier = Modifier.weight(1f),
                     label = "Net Savings",
                     value = formatINR(monthSummary.netSavings),
                     accent = if (monthSummary.netSavings >= 0) Green else Rust,
-                    sub = if (monthSummary.netSavings < 0) "spent more than earned" else null
+                    sub = if (monthSummary.netSavings < 0) "spent more than earned" else null,
+                    animatedValue = monthSummary.netSavings
                 )
                 SummaryCard(
                     modifier = Modifier.weight(1f),
                     label = "Budget usage",
                     value = formatINR(budgetSpent),
                     accent = if (overBudgets > 0) Rust else if (watchingBudgets > 0) Gold else Green,
+                    animatedValue = budgetSpent,
                     sub = if (budgetProgress.isEmpty()) {
                         "No caps set yet"
                     } else {
@@ -275,7 +280,7 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
         if (categoryTotals.isEmpty()) {
             item { Text("No expenses logged for this month yet.", color = Muted, fontSize = 13.sp) }
         } else {
-            items(categoryTotals) { (meta, amount, pct) ->
+            itemsIndexed(categoryTotals) { index, (meta, amount, pct) ->
                 val budget = budgetProgress.firstOrNull { it.category == meta.key }
                 CategoryBarRow(
                     label = meta.label,
@@ -286,7 +291,8 @@ fun DashboardScreen(viewModel: FinanceViewModel) {
                         else -> meta.color
                     },
                     amount = formatINR(amount),
-                    pct = pct
+                    pct = pct,
+                    index = index
                 )
             }
         }

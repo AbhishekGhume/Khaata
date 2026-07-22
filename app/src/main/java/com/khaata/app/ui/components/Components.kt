@@ -1,5 +1,7 @@
 package com.khaata.app.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -30,12 +32,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -62,6 +66,7 @@ import com.khaata.app.ui.theme.PaperCard
 import com.khaata.app.ui.theme.PaperLine
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.ui.theme.RustSoft
+import com.khaata.app.util.formatINR
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -72,7 +77,15 @@ fun SummaryCard(
     label: String,
     value: String,
     accent: Color = Ink,
-    sub: String? = null
+    sub: String? = null,
+    /**
+     * When set, the figure counts up/down to this amount (re-formatting through
+     * [format] each frame) instead of snapping — the signature "modern finance app"
+     * move. Callers with a raw number pass it here; [value] is the fallback text for
+     * everything else (percentages, non-money figures).
+     */
+    animatedValue: Double? = null,
+    format: (Double) -> String = ::formatINR,
 ) {
     Column(
         modifier
@@ -82,7 +95,15 @@ fun SummaryCard(
     ) {
         Text(label.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Muted, letterSpacing = 0.5.sp)
         Spacer(Modifier.height(6.dp))
-        Text(value, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = accent, fontFamily = FontFamily.Monospace)
+        val shown = if (animatedValue != null) {
+            val animated by animateFloatAsState(
+                targetValue = animatedValue.toFloat(),
+                animationSpec = valueReveal(),
+                label = "summaryAmount"
+            )
+            format(animated.toDouble())
+        } else value
+        Text(shown, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = accent, fontFamily = FontFamily.Monospace)
         if (sub != null) {
             Spacer(Modifier.height(2.dp))
             Text(sub, fontSize = 11.sp, color = Muted)
@@ -93,6 +114,15 @@ fun SummaryCard(
 /** A small "stamped" progress ring, like a passbook seal, showing % complete. */
 @Composable
 fun ProgressStamp(pct: Float, color: Color, size: Dp = 64.dp) {
+    // Sweep the ring and count the label up to the real percentage instead of
+    // drawing it at its final angle instantly — the single most "alive" touch on
+    // the Goals and Dashboard cards.
+    val animatedPct by animateFloatAsState(
+        targetValue = pct.coerceIn(0f, 100f),
+        animationSpec = valueReveal(),
+        label = "ringSweep"
+    )
+    val animatedColor by androidx.compose.animation.animateColorAsState(color, animationSpec = valueReveal(), label = "ringColor")
     Box(Modifier.size(size), contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(size)) {
             val stroke = 6.dp.toPx()
@@ -100,9 +130,9 @@ fun ProgressStamp(pct: Float, color: Color, size: Dp = 64.dp) {
             val topLeft = Offset(stroke / 2, stroke / 2)
             val arcSize = Size(diameter, diameter)
             drawArc(color = PaperLine, startAngle = -90f, sweepAngle = 360f, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
-            drawArc(color = color, startAngle = -90f, sweepAngle = 360f * (pct.coerceIn(0f, 100f) / 100f), useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+            drawArc(color = animatedColor, startAngle = -90f, sweepAngle = 360f * (animatedPct / 100f), useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
         }
-        Text("${pct.toInt()}%", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, color = Ink)
+        Text("${animatedPct.toInt()}%", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, color = Ink)
     }
 }
 
@@ -116,9 +146,19 @@ fun StatusBadge(status: GoalStatus) {
         GoalStatus.BEHIND -> BadgeStyle(RustSoft, Rust, "Behind pace", Icons.Filled.Warning)
         GoalStatus.OVERDUE -> BadgeStyle(OverdueSoft, Overdue, "Past due date", Icons.Filled.Schedule)
     }
+    // One-shot celebratory pop the moment a goal flips to ACHIEVED. Keyed on the
+    // status so it fires on the transition, not on every recomposition/scroll.
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(status) {
+        if (status == GoalStatus.ACHIEVED) {
+            pop.snapTo(0.7f)
+            pop.animateTo(1f, animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.45f, stiffness = androidx.compose.animation.core.Spring.StiffnessLow))
+        }
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
+            .scale(pop.value)
             .background(style.bg, RoundedCornerShape(50))
             .padding(horizontal = 9.dp, vertical = 3.dp)
     ) {
@@ -128,9 +168,19 @@ fun StatusBadge(status: GoalStatus) {
     }
 }
 
-/** A ledger-style row: a colored dot, a label, a fill bar, and a right-aligned amount. */
+/**
+ * A ledger-style row: a colored dot, a label, a fill bar, and a right-aligned amount.
+ * The bar grows from empty to its fraction on appear, staggered by [index] so a list
+ * of them reads as a dashboard coming to life rather than a static chart.
+ */
 @Composable
-fun CategoryBarRow(label: String, color: Color, amount: String, pct: Float) {
+fun CategoryBarRow(label: String, color: Color, amount: String, pct: Float, index: Int = 0) {
+    val target = (pct / 100f).coerceIn(0f, 1f)
+    val animatedFraction by animateFloatAsState(
+        targetValue = target,
+        animationSpec = valueReveal(delayMillis = staggerDelay(index)),
+        label = "barFill"
+    )
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Box(Modifier.size(9.dp).background(color, CircleShape))
         Spacer(Modifier.width(10.dp))
@@ -144,7 +194,7 @@ fun CategoryBarRow(label: String, color: Color, amount: String, pct: Float) {
             Box(
                 Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(fraction = (pct / 100f).coerceIn(0f, 1f))
+                    .fillMaxWidth(fraction = animatedFraction)
                     .background(color, RoundedCornerShape(50))
             )
         }

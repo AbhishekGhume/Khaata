@@ -1,5 +1,7 @@
 package com.khaata.app.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,8 +34,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -41,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.Expense
 import com.khaata.app.ui.theme.Green
+import com.khaata.app.ui.theme.GreenSoft
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.Rust
 import com.khaata.app.util.CategoryMeta
@@ -188,10 +193,22 @@ fun ExpenseListRow(
     onDelete: () -> Unit,
     showFullDate: Boolean = false,
     onLogAgain: (() -> Unit)? = null,
+    /** Briefly flashes the row green right after it's added, so the eye lands on it. */
+    highlight: Boolean = false,
 ) {
     val meta = categoryMeta(expense.category, categories)
+    // Flash from a soft green to transparent once; when `highlight` flips false the
+    // fade-out runs on its own, so the row settles back into the ledger.
+    val bg by animateColorAsState(
+        targetValue = if (highlight) GreenSoft else Color.Transparent,
+        animationSpec = tween(durationMillis = if (highlight) 250 else 650),
+        label = "rowHighlight"
+    )
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bg, RoundedCornerShape(8.dp))
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(

@@ -47,6 +47,7 @@ import com.khaata.app.ui.components.DatePickerField
 import com.khaata.app.ui.components.DeleteExpenseDialog
 import com.khaata.app.ui.components.EditExpenseDialog
 import com.khaata.app.ui.components.ExpenseListRow
+import com.khaata.app.ui.components.animatedListItem
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.PaperLine
 import com.khaata.app.util.categoryMeta
@@ -191,7 +192,7 @@ fun SearchScreen(viewModel: FinanceViewModel) {
         if (matchedGoals.isNotEmpty()) {
             item { Text("Goals", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Muted) }
             items(matchedGoals, key = { "goal_${it.id}" }) { g ->
-                Column {
+                Column(animatedListItem()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(g.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         Text(
@@ -212,7 +213,7 @@ fun SearchScreen(viewModel: FinanceViewModel) {
                     p.balance > 0.0 -> "Owes you ${formatINR(p.balance)}"
                     else -> "You owe ${formatINR(-p.balance)}"
                 }
-                Column {
+                Column(animatedListItem()) {
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(p.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -241,7 +242,7 @@ fun SearchScreen(viewModel: FinanceViewModel) {
             item { Text(if (anyFilterActive) "No entries match these filters." else "No expenses yet.", color = Muted, fontSize = 13.sp) }
         } else {
             items(filtered, key = { it.id }) { e ->
-                Column {
+                Column(animatedListItem()) {
                     ExpenseListRow(
                         e, categories,
                         onEdit = { expenseToEdit = e },

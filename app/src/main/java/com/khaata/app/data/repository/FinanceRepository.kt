@@ -361,7 +361,8 @@ class FinanceRepository(private val uid: String) {
         monthsRef().document(monthKey).set(mapOf("income" to roundMoney(income)), SetOptions.merge()).await()
     }
 
-    suspend fun addExpense(monthKey: String, expense: Expense) {
+    /** Returns the new expense's document id, so the UI can briefly highlight the row it just created. */
+    suspend fun addExpense(monthKey: String, expense: Expense): String {
         val monthRef = monthsRef().document(monthKey)
         val expenseRef = monthRef.collection("expenses").document()
         // Amounts are rounded to whole paise at this boundary (and every other
@@ -385,6 +386,7 @@ class FinanceRepository(private val uid: String) {
             // merge creates the month doc if absent, or atomically bumps the total.
             set(monthRef, mapOf("totalExpenses" to FieldValue.increment(amount)), SetOptions.merge())
         }.commit().await()
+        return expenseRef.id
     }
 
     /**

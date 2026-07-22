@@ -6,6 +6,21 @@ import android.content.pm.PackageManager
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -161,6 +176,24 @@ enum class SubScreen { SETTINGS, RECURRING, CATEGORIES, EXPORT }
 
 /** One entry in the in-app back stack: which tab was showing, and which sub-screen (if any) was layered over it. */
 private data class NavState(val tab: KhaataTab, val sub: SubScreen?)
+
+/**
+ * Left-to-right order used to decide which way the screen slides on a nav change.
+ * Follows the visible bottom-nav order first (so Dashboard→People slides left, like
+ * the eye expects), then the remaining tabs. A sub-screen is always "deeper" than a
+ * bare tab, so opening one slides in from the right and closing it slides back.
+ */
+private val NAV_ORDER = listOf(
+    KhaataTab.DASHBOARD, KhaataTab.PEOPLE, KhaataTab.BUDGETS, KhaataTab.ENTRY, KhaataTab.GOALS,
+    KhaataTab.ANALYTICS, KhaataTab.SEARCH, KhaataTab.HISTORY
+)
+
+private fun navIsForward(from: NavState, to: NavState): Boolean {
+    if (from.sub != to.sub) return to.sub != null   // opening a sub-screen = forward
+    val fi = NAV_ORDER.indexOf(from.tab)
+    val ti = NAV_ORDER.indexOf(to.tab)
+    return ti >= fi
+}
 
 class MainActivity : FragmentActivity() {
     private var openEntryTabRequested by mutableStateOf(false)
@@ -521,13 +554,24 @@ fun KhaataApp(
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    monthLabel(viewedMonthKey),
-                                    color = Paper,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                AnimatedContent(
+                                    targetState = viewedMonthKey,
+                                    transitionSpec = {
+                                        val up = targetState > initialState
+                                        (slideInVertically { h -> if (up) h else -h } + fadeIn()) togetherWith
+                                            (slideOutVertically { h -> if (up) -h else h } + fadeOut()) using
+                                            SizeTransform(clip = false)
+                                    },
+                                    label = "monthLabel"
+                                ) { key ->
+                                    Text(
+                                        monthLabel(key),
+                                        color = Paper,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                             IconButton(
                                 enabled = canGoToNextMonth,
@@ -574,7 +618,12 @@ fun KhaataApp(
             }
         },
         floatingActionButton = {
-            if (activeSubScreen == null && activeTab == KhaataTab.DASHBOARD) {
+            // Springs in/out instead of popping when the Dashboard shows.
+            AnimatedVisibility(
+                visible = activeSubScreen == null && activeTab == KhaataTab.DASHBOARD,
+                enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+                exit = scaleOut(tween(150)) + fadeOut(tween(150))
+            ) {
                 FloatingActionButton(
                     onClick = { navigateTo(KhaataTab.ENTRY) },
                     containerColor = Gold,
@@ -613,26 +662,40 @@ fun KhaataApp(
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            if (activeSubScreen != null) {
-                when (activeSubScreen) {
-                    SubScreen.SETTINGS -> NotificationSettingsScreen(viewModel = viewModel, onBack = { goBack() })
-                    SubScreen.RECURRING -> RecurringExpensesScreen(viewModel = viewModel, onBack = { goBack() })
-                    SubScreen.CATEGORIES -> CategoryManagementScreen(viewModel = viewModel, onBack = { goBack() })
-                    SubScreen.EXPORT -> ExportScreen(viewModel = viewModel, onBack = { goBack() })
-                    null -> Unit
-                }
-            } else {
-                when (activeTab) {
-                    KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
-                    KhaataTab.ANALYTICS -> AnalyticsScreen(viewModel)
-                    KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
-                    KhaataTab.ENTRY -> AddEntryScreen(viewModel)
-                    KhaataTab.GOALS -> GoalsScreen(viewModel)
-                    KhaataTab.PEOPLE -> PeopleScreen(viewModel)
-                    KhaataTab.SEARCH -> SearchScreen(viewModel)
-                    KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
-                        viewModel.jumpToMonth(key)
-                        navigateTo(KhaataTab.DASHBOARD)
+            // Directional slide+fade between screens: moving "right" in the nav slides
+            // content left (and back slides right), so the whole app feels like one
+            // continuous surface instead of hard-swapping composables.
+            AnimatedContent(
+                targetState = NavState(activeTab, activeSubScreen),
+                transitionSpec = {
+                    val forward = navIsForward(initialState, targetState)
+                    (slideInHorizontally(animationSpec = tween(300)) { w -> if (forward) w / 4 else -w / 4 } +
+                        fadeIn(tween(260))) togetherWith
+                        (slideOutHorizontally(animationSpec = tween(300)) { w -> if (forward) -w / 4 else w / 4 } +
+                            fadeOut(tween(180)))
+                },
+                label = "screenSwitch"
+            ) { nav ->
+                if (nav.sub != null) {
+                    when (nav.sub) {
+                        SubScreen.SETTINGS -> NotificationSettingsScreen(viewModel = viewModel, onBack = { goBack() })
+                        SubScreen.RECURRING -> RecurringExpensesScreen(viewModel = viewModel, onBack = { goBack() })
+                        SubScreen.CATEGORIES -> CategoryManagementScreen(viewModel = viewModel, onBack = { goBack() })
+                        SubScreen.EXPORT -> ExportScreen(viewModel = viewModel, onBack = { goBack() })
+                    }
+                } else {
+                    when (nav.tab) {
+                        KhaataTab.DASHBOARD -> DashboardScreen(viewModel)
+                        KhaataTab.ANALYTICS -> AnalyticsScreen(viewModel)
+                        KhaataTab.BUDGETS -> BudgetsScreen(viewModel)
+                        KhaataTab.ENTRY -> AddEntryScreen(viewModel)
+                        KhaataTab.GOALS -> GoalsScreen(viewModel)
+                        KhaataTab.PEOPLE -> PeopleScreen(viewModel)
+                        KhaataTab.SEARCH -> SearchScreen(viewModel)
+                        KhaataTab.HISTORY -> HistoryScreen(viewModel) { key ->
+                            viewModel.jumpToMonth(key)
+                            navigateTo(KhaataTab.DASHBOARD)
+                        }
                     }
                 }
             }

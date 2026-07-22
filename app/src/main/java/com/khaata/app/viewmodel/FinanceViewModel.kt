@@ -65,6 +65,12 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
     private val _viewedMonthKey = MutableStateFlow(currentMonthKey())
     val viewedMonthKey: StateFlow<String> = _viewedMonthKey
 
+    // The id of the most recently added expense, so the list can flash that one row
+    // green as it slides in. Cleared by the screen once the highlight has played.
+    private val _lastAddedExpenseId = MutableStateFlow<String?>(null)
+    val lastAddedExpenseId: StateFlow<String?> = _lastAddedExpenseId
+    fun clearLastAddedExpense() { _lastAddedExpenseId.value = null }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val monthSummary: StateFlow<MonthSummary> = _viewedMonthKey
         .flatMapLatest { key -> repository.observeMonthSummary(key) }
@@ -226,7 +232,9 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
                 monthKeyFromDate(date),
                 Expense(category = category, amount = amount, note = note, date = date)
             )
-        }.onFailure { postMessage("Couldn't add the entry — nothing was saved.") }
+        }
+            .onSuccess { newId -> _lastAddedExpenseId.value = newId }
+            .onFailure { postMessage("Couldn't add the entry — nothing was saved.") }
     }
 
     fun updateExpense(original: Expense, category: String, amount: Double, note: String, date: String) = viewModelScope.launch {
@@ -262,7 +270,10 @@ class FinanceViewModel(private val repository: FinanceRepository) : ViewModel() 
                 Expense(category = expense.category, amount = expense.amount, note = expense.note, date = today)
             )
         }
-            .onSuccess { postMessage("Logged again for today · ₹${"%,.0f".format(expense.amount)}.") }
+            .onSuccess { newId ->
+                _lastAddedExpenseId.value = newId
+                postMessage("Logged again for today · ₹${"%,.0f".format(expense.amount)}.")
+            }
             .onFailure { postMessage("Couldn't log the entry again — nothing was saved.") }
     }
 

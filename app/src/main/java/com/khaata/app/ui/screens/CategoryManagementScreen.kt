@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import com.khaata.app.util.CATEGORY_ICONS
 import com.khaata.app.util.CategoryMeta
 import com.khaata.app.util.iconForKey
+import com.khaata.app.ui.components.animatedListItem
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.Muted
 import com.khaata.app.ui.theme.Paper
@@ -112,7 +113,7 @@ fun CategoryManagementScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
                 }
             }
             itemsIndexed(categories, key = { _, it -> it.key }) { index, cat ->
-                Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
+                Surface(modifier = animatedListItem(), color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.RecurringExpense
 import com.khaata.app.ui.components.CategoryDropdown
+import com.khaata.app.ui.components.animatedListItem
 import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.Ink
 import com.khaata.app.ui.theme.Muted
@@ -115,7 +116,7 @@ fun RecurringExpensesScreen(viewModel: FinanceViewModel, onBack: () -> Unit) {
 
             items(recurring, key = { it.id }) { r ->
                 val meta = categoryMeta(r.category, categories)
-                Surface(color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
+                Surface(modifier = animatedListItem(), color = PaperCard, border = BorderStroke(1.dp, PaperLine), shape = RoundedCornerShape(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically

@@ -1,5 +1,6 @@
 package com.khaata.app.ui.screens
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.MonthSummary
 import com.khaata.app.data.model.monthLabel
+import com.khaata.app.ui.components.staggerDelay
+import com.khaata.app.ui.components.valueReveal
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Green
 import com.khaata.app.ui.theme.Muted
@@ -486,10 +489,17 @@ private fun FreeTrendGraph(
     val maxAbs = max(1.0, freeByMonth.values.maxOfOrNull { abs(it) } ?: 1.0)
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        months.forEach { month ->
+        months.forEachIndexed { index, month ->
             val free = freeByMonth[month.monthKey] ?: 0.0
             val barColor = if (free >= 0.0) Green else Rust
             val fraction = (abs(free) / maxAbs).toFloat().coerceIn(0f, 1f)
+            // Bars trace in from empty, staggered top-to-bottom, so the graph draws
+            // itself rather than appearing fully formed.
+            val animatedFraction by animateFloatAsState(
+                targetValue = fraction,
+                animationSpec = valueReveal(delayMillis = staggerDelay(index)),
+                label = "trendBar"
+            )
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text(
@@ -508,7 +518,7 @@ private fun FreeTrendGraph(
                     Box(
                         Modifier
                             .fillMaxHeight()
-                            .fillMaxWidth(fraction)
+                            .fillMaxWidth(animatedFraction)
                             .background(barColor, RoundedCornerShape(50))
                     )
                 }

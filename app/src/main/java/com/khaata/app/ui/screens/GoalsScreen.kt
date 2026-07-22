@@ -1,5 +1,6 @@
 package com.khaata.app.ui.screens
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +47,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,6 +63,7 @@ import com.khaata.app.data.model.forecast
 import com.khaata.app.data.model.monthLabel
 import com.khaata.app.data.model.todayStr
 import com.khaata.app.ui.components.DatePickerField
+import com.khaata.app.ui.components.animatedListItem
 import com.khaata.app.ui.components.ProgressStamp
 import com.khaata.app.ui.components.StatusBadge
 import com.khaata.app.ui.theme.Green
@@ -82,6 +86,7 @@ import com.khaata.app.viewmodel.FinanceViewModel
 fun GoalsScreen(viewModel: FinanceViewModel) {
     val goals by viewModel.goals.collectAsState()
     val goalStats = remember(goals) { goals.map { it to it.computeStats(currentMonthKey()) } }
+    val haptics = LocalHapticFeedback.current
 
     var showAddForm by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
@@ -173,6 +178,7 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
                                         // Saved regardless of the allocation warning above — a tight
                                         // or even over-income goal is a valid situation (shows as
                                         // "behind"), not something that should trap the user.
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         viewModel.addGoal(name.trim(), amt, targetDate.trim())
                                         goalFormError = null
                                         name = ""; targetAmount = ""; targetDate = ""; showAddForm = false
@@ -207,6 +213,7 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
 
         items(goalStats, key = { it.first.id }) { (goal, stats) ->
             GoalCard(
+                modifier = animatedListItem(),
                 goal = goal,
                 stats = stats,
                 isContribOpen = openContribGoalId == goal.id,
@@ -272,6 +279,7 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
             },
             confirmButton = {
                 TextButton(onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     viewModel.deleteGoal(goal)
                     goalToDelete = null
                 }) { Text("Delete", color = Rust) }
@@ -284,6 +292,7 @@ fun GoalsScreen(viewModel: FinanceViewModel) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GoalCard(
+    modifier: Modifier = Modifier,
     goal: Goal,
     stats: GoalStats,
     isContribOpen: Boolean,
@@ -317,11 +326,12 @@ private fun GoalCard(
     var contribToDelete by remember(goal.id) { mutableStateOf<Pair<String, Double>?>(null) }
 
     Surface(
+        modifier = modifier,
         color = PaperCard,
         border = BorderStroke(1.dp, PaperLine),
         shape = RoundedCornerShape(10.dp)
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(16.dp).animateContentSize()) {
 
             // ── Top: progress ring + goal info ──────────────────────────────
             Row(verticalAlignment = Alignment.Top) {

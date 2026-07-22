@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.khaata.app.data.model.Goal
 import com.khaata.app.data.model.MonthSummary
 import com.khaata.app.data.model.monthLabel
+import com.khaata.app.ui.components.animatedListItem
 import com.khaata.app.ui.theme.GoldSoft
 import com.khaata.app.ui.theme.Gold
 import com.khaata.app.ui.theme.Green
@@ -92,13 +93,15 @@ fun HistoryScreen(viewModel: FinanceViewModel, onJump: (String) -> Unit) {
 
         items(months, key = { it.monthKey }) { m ->
             val savedToGoals = goalsByMonth[m.monthKey] ?: 0.0
-            HistoryRow(
-                month = m,
-                savedToGoals = savedToGoals,
-                showGoalsColumn = goalsByMonth.isNotEmpty(),
-                onClick = { onJump(m.monthKey) }
-            )
-            HorizontalDivider(color = PaperLine)
+            Column(animatedListItem()) {
+                HistoryRow(
+                    month = m,
+                    savedToGoals = savedToGoals,
+                    showGoalsColumn = goalsByMonth.isNotEmpty(),
+                    onClick = { onJump(m.monthKey) }
+                )
+                HorizontalDivider(color = PaperLine)
+            }
         }
 
         if (goalsByMonth.isNotEmpty()) {

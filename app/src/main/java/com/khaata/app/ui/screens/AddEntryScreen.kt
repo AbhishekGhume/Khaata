@@ -1,6 +1,7 @@
 package com.khaata.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -39,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +48,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -91,6 +95,16 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
     val categories by viewModel.categories.collectAsState()
     val templates by viewModel.templates.collectAsState()
     val people by viewModel.people.collectAsState()
+    val lastAddedId by viewModel.lastAddedExpenseId.collectAsState()
+    val haptics = LocalHapticFeedback.current
+
+    // Let the "just added" flash play, then clear the flag so it doesn't re-trigger.
+    LaunchedEffect(lastAddedId) {
+        if (lastAddedId != null) {
+            kotlinx.coroutines.delay(900)
+            viewModel.clearLastAddedExpense()
+        }
+    }
 
     var incomeDraft by remember(monthSummary.income, viewedMonthKey) { mutableStateOf(moneyToInput(monthSummary.income)) }
     var incomeError by remember(viewedMonthKey) { mutableStateOf<String?>(null) }
@@ -198,12 +212,17 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
         item { Text("Log a kharcha entry", fontWeight = FontWeight.SemiBold, fontSize = 14.sp) }
         if (templates.isNotEmpty()) {
             item {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.animateContentSize()
+                ) {
                     templates.forEach { template ->
                         TemplateChip(
                             template = template,
                             categories = categories,
                             onTap = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 category = template.category
                                 amount = moneyToInput(template.amount)
                                 note = template.note
@@ -264,6 +283,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
                             amt == null -> amountError = "Enter an amount greater than 0."
                             date.isBlank() -> amountError = "Pick a date."
                             else -> {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.addExpense(category, amt, note.trim(), date)
                                 amount = ""; note = ""; amountError = null
                             }
@@ -303,12 +323,22 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
             item { Text("No entries yet for this month.", color = Muted, fontSize = 13.sp) }
         } else {
             items(expenses, key = { it.id }) { e ->
-                Column {
+                Column(
+                    Modifier.animateItem(
+                        fadeInSpec = com.khaata.app.ui.components.listItemFadeIn(),
+                        fadeOutSpec = com.khaata.app.ui.components.listItemFadeOut(),
+                        placementSpec = com.khaata.app.ui.components.listItemPlacement()
+                    )
+                ) {
                     ExpenseListRow(
                         e, categories,
                         onEdit = { expenseToEdit = e },
                         onDelete = { expenseToDelete = e },
-                        onLogAgain = { viewModel.logAgainToday(e) }
+                        onLogAgain = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.logAgainToday(e)
+                        },
+                        highlight = e.id == lastAddedId
                     )
                     HorizontalDivider(Modifier, DividerDefaults.Thickness, color = PaperLine)
                 }
@@ -334,6 +364,7 @@ fun AddEntryScreen(viewModel: FinanceViewModel) {
             categories = categories,
             onDismiss = { expenseToDelete = null },
             onConfirm = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 viewModel.deleteExpense(deleting)
                 expenseToDelete = null
             }
