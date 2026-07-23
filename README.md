@@ -97,7 +97,7 @@ Want to run Khaata yourself, or contribute to it? Here's the whole setup:
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/<your-username>/Khaata.git
+git clone https://github.com/AbhishekGhume/Khaata.git
 cd Khaata
 ```
 
