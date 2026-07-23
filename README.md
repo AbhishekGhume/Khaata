@@ -11,7 +11,6 @@ ledger that's actually pleasant to use every day.
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](#)
 [![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)](#)
 [![Firebase](https://img.shields.io/badge/Backend-Firebase-FFCA28?logo=firebase&logoColor=black)](#)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [Download the APK](https://drive.google.com/drive/folders/1I2oiQE2QTZj9puM4Bvam081MG5xJ3EVU?usp=sharing) · [Features](#-features) · [Getting started](#-getting-started) · [Contributing](#-contributing)
 
